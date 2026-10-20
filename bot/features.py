@@ -67,6 +67,12 @@ TEAMPREVIEW_FEATURES = [
     "fake_out", "speed_control", "redirect", "protect",
 ]
 D_TP = len(TEAMPREVIEW_FEATURES)
+LEAD_SYNERGY_FEATURES = [
+    "support_offense",
+    "trick_room_sweeper",
+    "psychic_terrain_expanding_force",
+]
+D_LEAD_SYNERGY = len(LEAD_SYNERGY_FEATURES)
 
 # Sensible starting point so the bot is competent from battle #1. Learning
 # moves the weights away from this; a small L2 pull keeps them from running off.
@@ -98,6 +104,10 @@ SUPPORT_ROLE_MOVES = SUPPORT | REDIRECT | SPEED_CONTROL | {
     "fakeout", "auroraveil", "lightscreen", "reflect", "safeguard",
     "healbell", "aromatherapy", "haze", "partingshot", "snarl",
     "taunt", "encore", "disable", "willowisp",
+}
+LEAD_SUPPORT_MOVES = SUPPORT | REDIRECT | {
+    "fakeout", "auroraveil", "lightscreen", "reflect", "safeguard",
+    "healbell", "aromatherapy", "partingshot",
 }
 SETUP_MOVES = {
     "bellydrum", "bulkup", "calmmind", "coil", "cosmicpower",
@@ -448,6 +458,44 @@ def teampreview_features(battle) -> np.ndarray:
             float(any(i in move_ids for i in ("protect", "detect", "spikyshield", "kingsshield", "banefulbunker"))),
         ])
     return np.array(rows) if rows else np.zeros((0, D_TP))
+
+
+def teampreview_pair_synergy(battle) -> np.ndarray:
+    """Return symmetric, pairwise lead-synergy features for our team."""
+    mons = list(battle.team.values())
+    synergy = np.zeros((len(mons), len(mons), D_LEAD_SYNERGY))
+    move_ids = [set((mon.moves or {}).keys()) for mon in mons]
+
+    def is_support(index: int) -> bool:
+        return bool(move_ids[index] & LEAD_SUPPORT_MOVES)
+
+    def is_attacker(index: int) -> bool:
+        return sum(
+            move.category != MoveCategory.STATUS
+            for move in (mons[index].moves or {}).values()
+        ) >= 2
+
+    for i, left in enumerate(mons):
+        for j in range(i + 1, len(mons)):
+            right = mons[j]
+            left_moves, right_moves = move_ids[i], move_ids[j]
+
+            if (is_support(i) and is_attacker(j)) or (is_support(j) and is_attacker(i)):
+                synergy[i, j, 0] = synergy[j, i, 0] = 1.0
+
+            has_trick_room = "trickroom" in left_moves or "trickroom" in right_moves
+            left_is_slow_attacker = is_attacker(i) and est_stat(left, "spe") <= 60
+            right_is_slow_attacker = is_attacker(j) and est_stat(right, "spe") <= 60
+            if has_trick_room and (left_is_slow_attacker or right_is_slow_attacker):
+                synergy[i, j, 1] = synergy[j, i, 1] = 1.0
+
+            if (
+                (left.ability == "psychicsurge" and "expandingforce" in right_moves)
+                or (right.ability == "psychicsurge" and "expandingforce" in left_moves)
+            ):
+                synergy[i, j, 2] = synergy[j, i, 2] = 1.0
+
+    return synergy
 
 
 # ------------------------------------------------------ battle state / shaping

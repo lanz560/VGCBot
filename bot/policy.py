@@ -17,7 +17,18 @@ from pathlib import Path
 
 import numpy as np
 
-from .features import D_MOVE, D_TP, PRIOR_MOVE, PRIOR_TP, SINGLE_FEATURES, PAIR_FEATURES, TEAMPREVIEW_FEATURES
+from .features import (
+    D_LEAD_SYNERGY,
+    D_MOVE,
+    D_TP,
+    PAIR_FEATURES,
+    PRIOR_MOVE,
+    PRIOR_TP,
+    SINGLE_FEATURES,
+    TEAMPREVIEW_FEATURES,
+)
+
+LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 1.1])
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
@@ -67,12 +78,27 @@ class Policy:
         p = softmax(logits)
         return int(self.rng.choice(len(p), p=p))
 
-    def pick_team(self, rows: np.ndarray, k: int) -> list[int]:
-        """Sample k members without replacement (first two are the leads)."""
+    def pick_team(
+        self,
+        rows: np.ndarray,
+        k: int,
+        pair_synergy: np.ndarray | None = None,
+    ) -> list[int]:
+        """Sample a team, using pair synergy only to choose the second lead."""
         remaining = list(range(len(rows)))
         picks: list[int] = []
         for _ in range(min(k, len(rows))):
-            p = softmax(rows[remaining] @ self.w_tp)
+            scores = rows[remaining] @ self.w_tp
+            if len(picks) == 1 and pair_synergy is not None:
+                if pair_synergy.shape != (len(rows), len(rows), D_LEAD_SYNERGY):
+                    raise ValueError(
+                        "pair_synergy must have shape "
+                        f"({len(rows)}, {len(rows)}, {D_LEAD_SYNERGY})"
+                    )
+                scores = scores + (
+                    pair_synergy[picks[0], remaining] @ LEAD_SYNERGY_WEIGHTS
+                )
+            p = softmax(scores)
             j = int(self.rng.choice(len(remaining), p=p))
             picks.append(remaining.pop(j))
         return picks

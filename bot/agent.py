@@ -25,26 +25,36 @@ class LearningVGCPlayer(Player):
         data_dir: str | Path = "data",
         learn: bool = True,
         prioritize_trick_room: bool = False,
+        lead_synergy: bool = True,
+        team_id: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
         self.policy = policy
         self.learning_enabled = learn
         self.prioritize_trick_room = prioritize_trick_room
+        self.lead_synergy = lead_synergy
+        self.team_id = team_id
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._traj: dict[str, Trajectory] = {}
+        self._lead_picks: dict[str, list[str]] = {}
 
     # ------------------------------------------------------------ team preview
     def teampreview(self, battle) -> str:
         try:
             rows = F.teampreview_features(battle)
-            k = battle.max_team_size or len(battle.team)
-            picks = self.policy.pick_team(rows, k)
             mons = list(battle.team.values())
+            k = min(battle.max_team_size or len(mons), len(mons))
+            if battle.format and "vgc" in battle.format:
+                k = min(k, 4)
+            pair_synergy = F.teampreview_pair_synergy(battle) if self.lead_synergy else None
+            picks = self.policy.pick_team(rows, k, pair_synergy)
+            self._lead_picks[battle.battle_tag] = [mons[i].species for i in picks[:2]]
             log.info(
-                "Team roles: %s",
+                "Team roles: %s | leads: %s",
                 ", ".join(f"{mon.species}={F.classify_role(mon)}" for mon in mons),
+                ", ".join(self._lead_picks[battle.battle_tag]),
             )
             for i in picks:
                 mons[i]._selected_in_teampreview = True
@@ -56,6 +66,21 @@ class LearningVGCPlayer(Player):
             return self.random_teampreview(battle)
 
     async def _handle_battle_message(self, split_messages: list[list[str]]) -> None:
+        ots_timeout = (
+            self.accept_open_team_sheet
+            and not self.format_is_bestof
+            and any(
+                part.endswith(" has 10 seconds left.")
+                for message in split_messages
+                for part in message
+            )
+            and not any(
+                len(message) > 2
+                and message[1] == "showteam"
+                and message[2] == "p2"
+                for message in split_messages
+            )
+        )
         if split_messages and split_messages[0]:
             room_header = split_messages[0][0]
             if room_header.startswith(">battle-"):
@@ -82,6 +107,16 @@ class LearningVGCPlayer(Player):
                         log.exception("failed to send battle result to chat")
 
         await super()._handle_battle_message(split_messages)
+        if ots_timeout and split_messages and split_messages[0]:
+            room_header = split_messages[0][0]
+            if room_header.startswith(">battle-"):
+                battle = await self._get_battle(room_header)
+                if battle.teampreview:
+                    log.info(
+                        "%s: OTS wait timed out; selecting team",
+                        battle.battle_tag,
+                    )
+                    await self._handle_battle_request(battle)
 
     # ------------------------------------------------------------------ moves
     def choose_move(self, battle):
@@ -135,13 +170,17 @@ class LearningVGCPlayer(Player):
                 stats = self.policy.learn(traj, won)
             except Exception:
                 log.exception("learning step failed")
-        self._log_battle(battle, won, stats)
+        leads = self._lead_picks.pop(battle.battle_tag, [])
+        self._log_battle(battle, won, stats, leads)
 
-    def _log_battle(self, battle, won, stats) -> None:
+    def _log_battle(self, battle, won, stats, leads: list[str]) -> None:
         rec = {
             "t": time.time(), "tag": battle.battle_tag, "format": battle.format,
+            "team_id": self.team_id,
             "won": won, "turns": battle.turn,
             "my_team": [m.species for m in battle.team.values()],
+            "leads": leads,
+            "lead_synergy": self.lead_synergy,
             "my_team_roles": [
                 {"species": mon.species, "role": F.classify_role(mon)}
                 for mon in battle.team.values()
