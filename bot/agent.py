@@ -42,6 +42,10 @@ class LearningVGCPlayer(Player):
             k = battle.max_team_size or len(battle.team)
             picks = self.policy.pick_team(rows, k)
             mons = list(battle.team.values())
+            log.info(
+                "Team roles: %s",
+                ", ".join(f"{mon.species}={F.classify_role(mon)}" for mon in mons),
+            )
             for i in picks:
                 mons[i]._selected_in_teampreview = True
             traj = self._traj.setdefault(battle.battle_tag, Trajectory())
@@ -138,6 +142,10 @@ class LearningVGCPlayer(Player):
             "t": time.time(), "tag": battle.battle_tag, "format": battle.format,
             "won": won, "turns": battle.turn,
             "my_team": [m.species for m in battle.team.values()],
+            "my_team_roles": [
+                {"species": mon.species, "role": F.classify_role(mon)}
+                for mon in battle.team.values()
+            ],
             "opp_team": [m.species for m in battle.opponent_team.values()],
             "learn": stats,
             "running_winrate": round(self.policy.wins / max(1, self.policy.battles_seen), 3),

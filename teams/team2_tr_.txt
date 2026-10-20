@@ -19,7 +19,7 @@ Quiet Nature
 - Trick Room  
 - Protect  
 
-Gallade (M) @ Iron Ball  
+Gallade (M) @ Focus Sash
 Ability: Sharpness  
 Level: 50  
 EVs: 32 HP / 32 Atk / 2 SpD  

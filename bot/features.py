@@ -6,6 +6,8 @@ each signal, so rough is fine as long as it is consistent.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
 from poke_env.battle import Pokemon
 from poke_env.battle.field import Field
@@ -92,6 +94,32 @@ SPEED_CONTROL = {"tailwind", "trickroom", "icywind", "electroweb", "thunderwave"
                  "glare", "scaryface", "stringshot", "bulldoze", "snarl"}
 REDIRECT = {"followme", "ragepowder"}
 SUPPORT = {"helpinghand", "coaching", "lifedew", "decorate", "afteryou"}
+SUPPORT_ROLE_MOVES = SUPPORT | REDIRECT | SPEED_CONTROL | {
+    "fakeout", "auroraveil", "lightscreen", "reflect", "safeguard",
+    "healbell", "aromatherapy", "haze", "partingshot", "snarl",
+    "taunt", "encore", "disable", "willowisp",
+}
+SETUP_MOVES = {
+    "bellydrum", "bulkup", "calmmind", "coil", "cosmicpower",
+    "curse", "dragondance", "growth", "honeclaws", "irondefense",
+    "nastyplot", "quiverdance", "shellsmash", "swordsdance", "tailglow",
+}
+
+
+def classify_role(mon: Pokemon) -> Literal["offensive", "support", "setup", "mix"]:
+    """Assign an informational role from a Pokémon's currently known moves."""
+    moves = list((mon.moves or {}).values())
+    move_ids = {move.id for move in moves}
+    attack_count = sum(move.category != MoveCategory.STATUS for move in moves)
+    support_count = len(move_ids & SUPPORT_ROLE_MOVES)
+
+    if move_ids & SETUP_MOVES:
+        return "setup"
+    if support_count >= 2 and attack_count <= 2:
+        return "support"
+    if attack_count >= 2 and support_count:
+        return "mix"
+    return "offensive"
 
 # --------------------------------------------------------------------- helpers
 def _boost_mult(stage: int) -> float:
