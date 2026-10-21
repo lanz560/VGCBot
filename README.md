@@ -22,6 +22,14 @@ The bot uses `gen9championsvgc2026regmc` by default. To choose another format:
 python runLadderGames.py --format gen9doublescustomgame --team teams/my_team.txt --games 3
 ```
 
+To challenge another player directly, provide their Showdown username with
+`--challenge`. The other player must accept the challenge. `--games` controls
+how many challenges to send:
+
+```bash
+python runLadderGames.py --format gen9doublescustomgame --team teams/my_team.txt --challenge Opponent --games 1
+```
+
 ## Command-line options
 
 | Flag | Default | Description |
@@ -29,6 +37,7 @@ python runLadderGames.py --format gen9doublescustomgame --team teams/my_team.txt
 | `--team PATH` | Required | Team file in Showdown export format. If the filename (without extension) contains `_tr_`, the bot prioritizes using Trick Room once while Trick Room is inactive. |
 | `--format ID` | `gen9championsvgc2026regmc` | Showdown format ID. |
 | `--games N` | `20` | Number of ladder games to play. |
+| `--challenge USERNAME` | Off | Challenge this player directly instead of searching the ladder. |
 | `--data-dir PATH` | `data` | Directory for policy weights, battle logs, and optional replays. |
 | `--weights PATH` | `<data-dir>/weights.json` | Policy weights file. Can be shared between evaluation runs. |
 | `--seed N` | Random | Random seed for policy sampling. |

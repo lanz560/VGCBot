@@ -1,10 +1,13 @@
-"""Play the Showdown ladder and learn from every battle.
+"""Play Showdown ladder or direct-challenge games and learn from every battle.
 
     export PS_USER=MyBotName PS_PASS=secret
-    python run_ladder.py --format gen9championsvgc2026regmc --team teams/my_team.txt --games 50
+    python runLadderGames.py --format gen9championsvgc2026regmc --team teams/my_team.txt --games 50
 
 Local test server (no password needed):
-    python run_ladder.py --local --format gen9doublescustomgame --team teams/example_team.txt --games 3
+    python runLadderGames.py --local --format gen9doublescustomgame --team teams/example_team.txt --games 3
+
+Challenge a player directly:
+    python runLadderGames.py --team teams/my_team.txt --challenge Opponent --games 1
 """
 import argparse
 import asyncio
@@ -25,6 +28,8 @@ async def main() -> None:
                     help="Showdown format id (lowercase, no spaces or brackets)")
     ap.add_argument("--team", required=True, help="Showdown export-format team file")
     ap.add_argument("--games", type=int, default=20)
+    ap.add_argument("--challenge", metavar="USERNAME",
+                    help="challenge this player directly instead of searching the ladder")
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--weights", help="policy weights file (defaults to <data-dir>/weights.json)")
     ap.add_argument("--seed", type=int, help="random seed for reproducible policy sampling")
@@ -62,7 +67,10 @@ async def main() -> None:
         battle_format=args.format, team=team, max_concurrent_battles=1,
         accept_open_team_sheet=("vgc" in args.format and not args.no_ots), save_replays=str(Path(args.data_dir) / "replays") if args.save_replays else False,
     )
-    await player.ladder(args.games)
+    if args.challenge is not None:
+        await player.send_challenges(args.challenge, args.games)
+    else:
+        await player.ladder(args.games)
     print(f"Done. {player.n_won_battles}/{player.n_finished_battles} won this session. "
           f"Weights saved to {policy.path}")
 
