@@ -32,7 +32,7 @@ LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 1.1])
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
-    z = x - x.max()
+    z = x - x.max() 
     e = np.exp(z)
     return e / e.sum()
 
