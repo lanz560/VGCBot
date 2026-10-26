@@ -2,8 +2,13 @@
 
 # Requirements
 
-poke-env>=0.16
-numpy
+Install dependencies with:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+The requirements are `poke-env>=0.16`, `numpy`, and `requests`.
 
 # Running the bot
 
@@ -15,6 +20,9 @@ export PS_USER="YourShowdownUsername"
 export PS_PASS="YourShowdownPassword"
 python runLadderGames.py --team teams/my_team.txt --games 50
 ```
+
+`run_ladder.py` is also available as a snake_case entry point for the same
+runner.
 
 The bot uses `gen9championsvgc2026regmc` by default. To choose another format:
 
@@ -81,6 +89,14 @@ python compare_battles.py data/ab/baseline/battles.jsonl data/ab/synergy/battles
 The comparison checks that both logs use the same format and team. Win rates
 from a small number of games are noisy; gather multiple blocks before drawing
 conclusions.
+
+## Replay-training scaffold
+
+The replay-training paths (`bot/replay_data.py`, `bot/imitation.py`,
+`scrape_logs.py`, and `train_from_replays.py`) are placeholders. Replay
+parsing, scraping, and imitation training are not implemented yet. Scraped
+logs belong in `battle_logs/`; generated logs and weights under `data/` are
+ignored by git.
 
 # Team roles
 

@@ -111,13 +111,13 @@ class Policy:
         rewards = np.array([pots[t + 1] - pots[t] for t in range(T)]) if T else np.zeros(0)
         if T:
             rewards[-1] += outcome
-
+ 
         G = np.zeros(T)
         run = 0.0
         for t in reversed(range(T)):
             run = rewards[t] + self.gamma * run
             G[t] = run
-
+ 
         stats = {"turns": T, "return0": float(G[0]) if T else float(outcome)}
         if T:
             V = np.array([self.v @ s.psi for s in traj.steps])
@@ -127,20 +127,19 @@ class Policy:
             if T >= 3 and adv.std() > 1e-6:
                 adv = adv / (adv.std() + 1e-6)
             adv = np.clip(adv, -2.5, 2.5)
-
+ 
             grad = np.zeros_like(self.w)
             for s, a in zip(traj.steps, adv):
-                logits = s.phi @ self.w + s.bias
-                p = softmax(logits)
+                p = softmax(s.phi @ self.w)
                 grad += a * (s.phi[s.chosen] - p @ s.phi)
             grad /= T
-            step = self.lr * grad - self.prior_pull * (self.w - PRIOR_MOVE)
+            step = self.lr * grad - self.prior_pull * (self.w - self.anchor)
             n = np.linalg.norm(step)
             if n > 0.5:                              # trust-region-ish cap
                 step *= 0.5 / n
             self.w += step
             stats["grad_norm"] = float(np.linalg.norm(grad))
-
+ 
         # team preview gets the whole-battle return as its signal
         if traj.tp_rows is not None and traj.tp_picks:
             g0 = float(G[0]) if T else float(outcome)
@@ -155,11 +154,13 @@ class Policy:
             step = 0.5 * self.lr * adv_tp * grad / len(traj.tp_picks) \
                 - self.prior_pull * (self.w_tp - PRIOR_TP)
             self.w_tp += step
-
+ 
         self.battles_seen += 1
         self.wins += bool(won)
         self.save()
         return stats
+ 
+
 
     # ------------------------------------------------------------- disk
     def save(self) -> None:
@@ -167,13 +168,13 @@ class Policy:
         blob = {
             "saved_at": time.time(), "battles_seen": self.battles_seen, "wins": self.wins,
             "w_move": self.w.tolist(), "w_tp": self.w_tp.tolist(), "v": self.v.tolist(),
-            "tp_baseline": self.tp_baseline,
+            "tp_baseline": self.tp_baseline, "anchor_move": self.anchor.tolist(),
             "feature_names": SINGLE_FEATURES + PAIR_FEATURES, "tp_feature_names": TEAMPREVIEW_FEATURES,
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(blob, indent=1))
         tmp.replace(self.path)
-
+ 
     def _load(self) -> None:
         if not self.path.exists():
             return
@@ -181,4 +182,6 @@ class Policy:
         if len(b.get("w_move", [])) == D_MOVE and len(b.get("w_tp", [])) == D_TP:
             self.w, self.w_tp = np.array(b["w_move"]), np.array(b["w_tp"])
             self.v, self.tp_baseline = np.array(b["v"]), b.get("tp_baseline", 0.0)
+            if len(b.get("anchor_move", [])) == D_MOVE:
+                self.anchor = np.array(b["anchor_move"])
             self.battles_seen, self.wins = b.get("battles_seen", 0), b.get("wins", 0)
