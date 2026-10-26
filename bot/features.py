@@ -216,6 +216,14 @@ def _expanding_force_boosted(mon: Pokemon, move: Move, battle) -> bool:
         and Field.PSYCHIC_TERRAIN in battle.fields
         and _grounded(mon, battle)
     )
+
+#TODO add in niche moves like flail, reversal, crush grip, wring out etc
+def _effective_base_power(att: Pokemon, move: Move) -> float:
+    if move.id == "eruption" or move.id == "waterspout"  :
+        return max(1, int(150 * att.current_hp_fraction))
+    return move.base_power or (60 if move.category != MoveCategory.STATUS else 0)
+
+
 def _rising_voltage_boosted(dfn: Pokemon, move: Move, battle) -> bool:
     return (
         move.id == "risingvoltage"
@@ -225,7 +233,7 @@ def _rising_voltage_boosted(dfn: Pokemon, move: Move, battle) -> bool:
 
 
 def move_frac(att: Pokemon, move: Move, dfn: Pokemon, battle) -> float:
-    bp = move.base_power or (60 if move.category != MoveCategory.STATUS else 0)
+    bp = _effective_base_power(att, move)
     multiplier = 1.0
     if (
         move.type.name.lower() == "psychic"
