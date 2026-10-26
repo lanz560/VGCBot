@@ -51,6 +51,7 @@ class Trajectory:
     steps: list[Step] = field(default_factory=list)
     tp_rows: np.ndarray | None = None        # (n_mons, D_TP)
     tp_picks: list[int] = field(default_factory=list)
+    tp_pair_synergy: np.ndarray | None = None
     final_pot: float = 0.0
 
 
@@ -63,6 +64,7 @@ class Policy:
         self.terminal_reward = terminal_reward
         self.rng = np.random.default_rng(seed)
         self.w = PRIOR_MOVE.copy()
+        self.anchor = PRIOR_MOVE.copy()
         self.w_tp = PRIOR_TP.copy()
         self.v = np.zeros(5)
         self.tp_baseline = 0.0
@@ -130,7 +132,7 @@ class Policy:
  
             grad = np.zeros_like(self.w)
             for s, a in zip(traj.steps, adv):
-                p = softmax(s.phi @ self.w)
+                p = softmax(s.phi @ self.w + s.bias)
                 grad += a * (s.phi[s.chosen] - p @ s.phi)
             grad /= T
             step = self.lr * grad - self.prior_pull * (self.w - self.anchor)
@@ -147,8 +149,22 @@ class Policy:
             self.tp_baseline += 0.1 * (g0 - self.tp_baseline)
             grad = np.zeros_like(self.w_tp)
             remaining = list(range(len(traj.tp_rows)))
-            for pick in traj.tp_picks:
-                p = softmax(traj.tp_rows[remaining] @ self.w_tp)
+            for pick_index, pick in enumerate(traj.tp_picks):
+                scores = traj.tp_rows[remaining] @ self.w_tp
+                if pick_index == 1 and traj.tp_pair_synergy is not None:
+                    if traj.tp_pair_synergy.shape != (
+                        len(traj.tp_rows), len(traj.tp_rows), D_LEAD_SYNERGY
+                    ):
+                        raise ValueError(
+                            "tp_pair_synergy must have shape "
+                            f"({len(traj.tp_rows)}, {len(traj.tp_rows)}, "
+                            f"{D_LEAD_SYNERGY})"
+                        )
+                    scores = scores + (
+                        traj.tp_pair_synergy[traj.tp_picks[0], remaining]
+                        @ LEAD_SYNERGY_WEIGHTS
+                    )
+                p = softmax(scores)
                 grad += traj.tp_rows[pick] - p @ traj.tp_rows[remaining]
                 remaining.remove(pick)
             step = 0.5 * self.lr * adv_tp * grad / len(traj.tp_picks) \

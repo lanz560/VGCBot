@@ -60,6 +60,7 @@ class LearningVGCPlayer(Player):
                 mons[i]._selected_in_teampreview = True
             traj = self._traj.setdefault(battle.battle_tag, Trajectory())
             traj.tp_rows, traj.tp_picks = rows, picks
+            traj.tp_pair_synergy = pair_synergy
             return "/team " + "".join(str(i + 1) for i in picks)
         except Exception:
             log.exception("teampreview failed, falling back to random")
@@ -70,7 +71,7 @@ class LearningVGCPlayer(Player):
             self.accept_open_team_sheet
             and not self.format_is_bestof
             and any(
-                part.endswith(" has 10 seconds left.")
+                part.endswith(" has 30 seconds left.")
                 for message in split_messages
                 for part in message
             )
