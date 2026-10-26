@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Literal
 
 import numpy as np
-from poke_env.battle import Pokemon
+from poke_env.battle import Pokemon, PokemonType
 from poke_env.battle.field import Field
 from poke_env.battle.move import Move
 from poke_env.battle.move_category import MoveCategory
@@ -224,26 +224,63 @@ def _effective_base_power(att: Pokemon, move: Move) -> float:
     return move.base_power or (60 if move.category != MoveCategory.STATUS else 0)
 
 
-def _rising_voltage_boosted(dfn: Pokemon, move: Move, battle) -> bool:
-    return (
-        move.id == "risingvoltage"
-        and Field.ELECTRIC_TERRAIN in battle.fields
-        and _grounded(dfn, battle)
+_TERRAIN_TYPES = {
+    Field.ELECTRIC_TERRAIN: PokemonType.ELECTRIC,
+    Field.GRASSY_TERRAIN: PokemonType.GRASS,
+    Field.MISTY_TERRAIN: PokemonType.FAIRY,
+    Field.PSYCHIC_TERRAIN: PokemonType.PSYCHIC,
+}
+
+
+def _bp_after_terrian(att: Pokemon, move: Move, dfn: Pokemon, battle):
+    """Return (base power, type, terrain damage multiplier) after terrain effects."""
+    bp = _effective_base_power(att, move)
+    move_type = move.type
+    terrain = next(
+        (field for field in _TERRAIN_TYPES if field in battle.fields),
+        None,
     )
+    attacker_grounded = _grounded(att, battle)
+    defender_grounded = _grounded(dfn, battle)
+
+    if move.id == "terrainpulse" and terrain is not None and attacker_grounded:
+        bp *= 2
+        move_type = _TERRAIN_TYPES[terrain]
+    elif (
+        move.id == "expandingforce"
+        and terrain == Field.PSYCHIC_TERRAIN
+        and attacker_grounded
+    ):
+        bp *= 1.5
+    elif (
+        move.id == "risingvoltage"
+        and terrain == Field.ELECTRIC_TERRAIN
+        and defender_grounded
+    ):
+        bp *= 2
+    elif (
+        move.id == "mistyexplosion"
+        and terrain == Field.MISTY_TERRAIN
+        and attacker_grounded
+    ):
+        bp *= 1.5
+
+    terrain_multiplier = 1.0
+    if attacker_grounded and terrain is not None:
+        terrain_type = _TERRAIN_TYPES[terrain]
+        if terrain_type in (PokemonType.ELECTRIC, PokemonType.GRASS, PokemonType.PSYCHIC):
+            if move_type == terrain_type:
+                terrain_multiplier = 1.3
+
+    return bp, move_type, terrain_multiplier
 
 
 def move_frac(att: Pokemon, move: Move, dfn: Pokemon, battle) -> float:
-    bp = _effective_base_power(att, move)
-    multiplier = 1.0
-    if (
-        move.type.name.lower() == "psychic"
-        and Field.PSYCHIC_TERRAIN in battle.fields
-        and _grounded(att, battle)
-    ):
-        multiplier *= 1.3
-        if move.id == "expandingforce":
-            bp *= 1.5
-    return calc_frac(att, move.type, move.category, bp, dfn) * multiplier
+    bp, move_type, terrain_multiplier = _bp_after_terrian(att, move, dfn, battle)
+    return (
+        calc_frac(att, move_type, move.category, bp, dfn)
+        * terrain_multiplier
+    )
 
 
 def incoming_threat(attacker: Pokemon, defender: Pokemon, battle) -> float:
