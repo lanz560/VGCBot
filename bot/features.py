@@ -216,6 +216,12 @@ def _expanding_force_boosted(mon: Pokemon, move: Move, battle) -> bool:
         and Field.PSYCHIC_TERRAIN in battle.fields
         and _grounded(mon, battle)
     )
+def _rising_voltage_boosted(dfn: Pokemon, move: Move, battle) -> bool:
+    return (
+        move.id == "risingvoltage"
+        and Field.ELECTRIC_TERRAIN in battle.fields
+        and _grounded(dfn, battle)
+    )
 
 
 def move_frac(att: Pokemon, move: Move, dfn: Pokemon, battle) -> float:
