@@ -11,6 +11,7 @@ from typing import Literal
 import numpy as np
 from poke_env.battle import Pokemon, PokemonType
 from poke_env.battle.field import Field
+from poke_env.battle.weather import Weather
 from poke_env.battle.move import Move
 from poke_env.battle.move_category import MoveCategory
 from poke_env.battle.side_condition import SideCondition
@@ -210,13 +211,6 @@ def _grounded(mon: Pokemon, battle) -> bool:
     )
 
 
-def _expanding_force_boosted(mon: Pokemon, move: Move, battle) -> bool:
-    return (
-        move.id == "expandingforce"
-        and Field.PSYCHIC_TERRAIN in battle.fields
-        and _grounded(mon, battle)
-    )
-
 #TODO add in niche moves like flail, reversal, crush grip, wring out etc
 def _effective_base_power(att: Pokemon, move: Move) -> float:
     if move.id == "eruption" or move.id == "waterspout"  :
@@ -275,11 +269,71 @@ def _bp_after_terrian(att: Pokemon, move: Move, dfn: Pokemon, battle):
     return bp, move_type, terrain_multiplier
 
 
+
+#partially sloppy code but it should work 
+def weather_multiplier(move: Move, dfn: Pokemon, battle):
+    """returns bp multiplier dependent on weather."""
+    move_type = move.type
+    weather = battle.weather
+    multiplier = 1.0
+    wb, sb = False
+    
+    if not weather:
+        return 1.0, move_type
+    #for move weatherball that doubles power and type 
+    elif move.id == "weatherball":
+        multiplier *= 2.0
+        wb = True
+    elif move.id == "solarbeam":
+        sb = True
+
+    if Weather.RAINDANCE in weather:
+        if wb:
+            move_type = PokemonType.WATER
+        if move_type == PokemonType.FIRE or sb:
+            multiplier *= 0.5
+        elif move_type == PokemonType.WATER:
+            multiplier *= 1.5
+    elif Weather.SUNNYDAY in weather:
+        if wb:
+                move_type = PokemonType.FIRE
+        if move_type == PokemonType.FIRE:
+                multiplier *= 1.5
+        elif move_type == PokemonType.WATER:
+                multiplier *= 0.5
+    
+    #TODO this code does not cover the edge cases of moves like psyshock and secret sword 
+    elif Weather.SNOWSCAPE in weather:
+        if wb:
+            move_type = PokemonType.ICE
+        if sb:
+            multiplier *= 0.5
+        if (dfn._type_1  == PokemonType.ICE or dfn._type_2 == PokemonType.ICE) and move.category == MoveCategory.PHYSICAL:
+            multiplier *= 0.67
+    elif Weather.SANDSTORM in weather:
+        if sb:
+            multiplier *= 0.5
+        if (dfn._type_1  == PokemonType.ROCK or dfn._type_2 == PokemonType.ROCK) and move.category == MoveCategory.SPECIAL:
+            multiplier *= 0.67
+
+
+
+    
+    return multiplier, move_type
+
+    
+
+
+
 def move_frac(att: Pokemon, move: Move, dfn: Pokemon, battle) -> float:
+    enviornment_multiplier = 1.0
     bp, move_type, terrain_multiplier = _bp_after_terrian(att, move, dfn, battle)
+    enviornment_multiplier *= terrain_multiplier
+    weather, move_type = weather_multiplier(move, dfn, battle)
+    enviornment_multiplier *= weather
     return (
         calc_frac(att, move_type, move.category, bp, dfn)
-        * terrain_multiplier
+        * enviornment_multiplier
     )
 
 
@@ -347,9 +401,6 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     move: Move = thing
     mid = move.id
     kind = move.entry.get("target", "normal")
-    expanding_force = _expanding_force_boosted(me, move, battle)
-    if expanding_force:
-        kind = "allAdjacentFoes"
     foes = battle.opponent_active_pokemon
     ally = battle.active_pokemon[1 - slot]
     my_spe = speed(me, battle, True)
