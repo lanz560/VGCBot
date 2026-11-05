@@ -271,12 +271,12 @@ def _bp_after_terrian(att: Pokemon, move: Move, dfn: Pokemon, battle):
 
 
 #partially sloppy code but it should work 
-def weather_multiplier(move: Move, dfn: Pokemon, battle):
+def weather_multiplier(move: Move, move_type: PokemonType, dfn: Pokemon, battle):
     """returns bp multiplier dependent on weather."""
-    move_type = move.type
+  
     weather = battle.weather
     multiplier = 1.0
-    wb, sb = False
+    wb, sb = False, False
     
     if not weather:
         return 1.0, move_type
@@ -326,14 +326,13 @@ def weather_multiplier(move: Move, dfn: Pokemon, battle):
 
 
 def move_frac(att: Pokemon, move: Move, dfn: Pokemon, battle) -> float:
-    enviornment_multiplier = 1.0
-    bp, move_type, terrain_multiplier = _bp_after_terrian(att, move, dfn, battle)
-    enviornment_multiplier *= terrain_multiplier
-    weather, move_type = weather_multiplier(move, dfn, battle)
-    enviornment_multiplier *= weather
+  
+    bp, move_type, terrain = _bp_after_terrian(att, move, dfn, battle)
+    weather, move_type = weather_multiplier(move, move_type, dfn, battle)
     return (
         calc_frac(att, move_type, move.category, bp, dfn)
-        * enviornment_multiplier
+        * terrain
+        * weather
     )
 
 
