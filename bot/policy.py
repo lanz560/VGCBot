@@ -28,7 +28,14 @@ from .features import (
     TEAMPREVIEW_FEATURES,
 )
 
-LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 1.1])
+"""Synergy feature	Weights
+Support + attacker	0.65
+Trick Room + slow attacker	0.8
+Psychic Surge + Expanding Force	1.1
+
+Will add more 
+"""
+LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 0.8])
 
 
 def softmax(x: np.ndarray) -> np.ndarray:

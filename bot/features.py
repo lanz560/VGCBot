@@ -148,7 +148,7 @@ def est_stat(mon: Pokemon, key: str) -> float:
 
 
 def _hp_abs(mon: Pokemon) -> float:
-    if mon.max_hp and mon.max_hp > 100:        # our own mons carry real HP
+    if mon.max_hp and mon.max_hp > 100:        #mons carry real HP
         return float(mon.max_hp)
     return est_stat(mon, "hp")
 
