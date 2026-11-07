@@ -35,7 +35,7 @@ Psychic Surge + Expanding Force	1.1
 
 Will add more 
 """
-LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 0.8])
+LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 0.9])
 
 
 def softmax(x: np.ndarray) -> np.ndarray:

@@ -271,7 +271,16 @@ def matchup(battle, mon: Pokemon) -> float:
 # ------------------------------------------------------------ per-action features
 def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     v = np.zeros(F_S)
-    aux = {"kind": "other", "tgt": None, "ko": 0, "dmg": 0.0, "protect": False}
+    aux = {
+        "kind": "other",
+        "tgt": None,
+        "ko": 0,
+        "dmg": 0.0,
+        "protect": False,
+        "move_id": None,
+        "spread_move": False,
+        "damage_records": [],
+    }
     if not isinstance(order, SingleBattleOrder) or isinstance(order, (PassBattleOrder, DefaultBattleOrder)):
         return v, aux
     me = battle.active_pokemon[slot]
@@ -299,6 +308,8 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     expanding_force = _expanding_force_boosted(me, move, battle)
     if expanding_force:
         kind = "allAdjacentFoes"
+    aux["move_id"] = mid
+    aux["spread_move"] = kind in ("allAdjacentFoes", "allAdjacent")
     foes = battle.opponent_active_pokemon
     ally = battle.active_pokemon[1 - slot]
     my_spe = speed(me, battle, True)
@@ -333,6 +344,7 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
         frac = move_frac(me, move, tmon, battle) * mult
         cur = max(tmon.current_hp_fraction, 0.02)
         part = min(1.0, frac / cur)
+        aux["damage_records"].append((is_foe, frac, cur, acc, move.priority))
         if is_foe:
             v[S["dmg_frac"]] += acc * part
             if frac >= 0.95 * cur and acc >= 0.85:
@@ -380,6 +392,36 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     return v, aux
 
 
+def _apply_helping_hand_bonus(features: np.ndarray, attack_aux: dict) -> dict:
+    """Add the incremental damage estimate for Helping Hand on a spread attack."""
+    updated_aux = dict(attack_aux)
+    updated_aux["ko"] = attack_aux["ko"]
+    updated_aux["dmg"] = attack_aux["dmg"]
+    added_kos = 0
+
+    for is_foe, damage, current_hp, accuracy, priority in attack_aux["damage_records"]:
+        boosted_damage = damage * 1.5
+        before = min(1.0, damage / current_hp)
+        after = min(1.0, boosted_damage / current_hp)
+        if is_foe:
+            features[S["dmg_frac"]] += accuracy * (after - before)
+            updated_aux["dmg"] += (boosted_damage - damage) / current_hp
+            if (
+                damage < 0.95 * current_hp
+                and boosted_damage >= 0.95 * current_hp
+                and accuracy >= 0.85
+            ):
+                added_kos += 1
+                if priority > 0:
+                    features[S["priority_ko"]] = 1.0
+        else:
+            features[S["ally_dmg"]] += after - before
+
+    updated_aux["ko"] += added_kos
+    features[S["ko"]] += added_kos
+    return updated_aux
+
+
 def pair_features(a1: dict, a2: dict) -> np.ndarray:
     p = np.zeros(F_P)
     if a1["kind"] == "attack" and a2["kind"] == "attack" and a1["tgt"] and a1["tgt"] == a2["tgt"]:
@@ -421,7 +463,15 @@ def build_candidates(battle):
             if isinstance(o1.order, Pokemon) and o1.order is o2.order:
                 continue
             orders.append(DoubleBattleOrder(first_order=o1, second_order=o2))
-            rows.append(np.concatenate([v1 + v2, pair_features(a1, a2)]))
+            joint_features = v1 + v2
+            joint_a1, joint_a2 = dict(a1), dict(a2)
+            if a1["move_id"] == "helpinghand" and a2["spread_move"]:
+                joint_a2 = _apply_helping_hand_bonus(joint_features, a2)
+            elif a2["move_id"] == "helpinghand" and a1["spread_move"]:
+                joint_a1 = _apply_helping_hand_bonus(joint_features, a1)
+            rows.append(
+                np.concatenate([joint_features, pair_features(joint_a1, joint_a2)])
+            )
     if not orders:
         return [], np.zeros((0, D_MOVE))
     return orders, np.vstack(rows)
