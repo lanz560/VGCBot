@@ -61,6 +61,13 @@ For a local run:
 python runLadderGames.py --local --format gen9doublescustomgame --team teams/my_team.txt --games 3
 ```
 
+## Battle timer
+
+The bot does not automatically enable Showdown's battle timer. To turn it on,
+send `/timer` in the battle room chat. The OTS team-preview timeout handling
+is separate: it submits the selected team when the preview warning arrives,
+but does not start the battle timer.
+
 ## Lead-synergy A/B comparison
 
 The default lead picker adds small, fixed bonuses to the second lead for these
