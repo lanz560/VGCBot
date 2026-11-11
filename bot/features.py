@@ -213,6 +213,7 @@ def _grounded(mon: Pokemon, battle) -> bool:
 
 #TODO add in niche moves like flail, reversal, crush grip, wring out etc
 def _effective_base_power(att: Pokemon, move: Move) -> float:
+    '''Calculates base power for variable moves'''
     if move.id == "eruption" or move.id == "waterspout"  :
         return max(1, int(150 * att.current_hp_fraction))
     return move.base_power or (60 if move.category != MoveCategory.STATUS else 0)
