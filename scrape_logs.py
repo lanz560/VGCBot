@@ -1,16 +1,10 @@
-"""
-Battle log scraping module for VGC-Bench.
-
-Scrapes battle replay logs from Pokemon Showdown's replay database for use
-in behavior cloning. Filters logs to ensure they have complete team information
-and are suitable for training data extraction.
-"""
+"""Download complete VGC replays from Pokémon Showdown for offline analysis."""
 
 import argparse
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,21 +21,7 @@ FORMATS = [
 def scrape_logs(
     num_workers: int, increment: int, battle_format: str, max_logs: int | None = None
 ) -> bool:
-    """
-    Scrape battle logs from Pokemon Showdown replay database.
-
-    Fetches new battle logs for a given format, filters them based on
-    completeness criteria, and saves them to a JSON file.
-
-    Args:
-        num_workers: Number of parallel download threads (0 for sequential).
-        increment: Number of battles to search through when finding logs.
-        battle_format: Pokemon Showdown format string to scrape.
-        max_logs: If set, stop after collecting this many total valid logs.
-
-    Returns:
-        True if no new logs were found (scraping complete), False otherwise.
-    """
+    """Download/filter replays and persist them. Return True when no new logs were added."""
     logs_path = Path(f"battle_logs/logs_{battle_format}.json")
     if logs_path.exists():
         with logs_path.open("r") as f:
@@ -54,7 +34,7 @@ def scrape_logs(
     oldest = min(log_times) if log_times else 2_000_000_000
     newest = max(log_times) if log_times else None
     battle_idents = get_battle_idents(increment, battle_format, oldest, newest)
-    battle_idents = [ident for ident in battle_idents if ident not in old_logs.keys()]
+    battle_idents = [ident for ident in battle_idents if ident not in old_logs]
     if num_workers == 0:
         log_jsons = [get_log_json(ident) for ident in battle_idents]
     else:
@@ -83,26 +63,14 @@ def scrape_logs(
 
 
 def can_distinguish_team_members(log: str, player_role: str) -> bool:
-    """
-    Check if all Pokemon on a team can be uniquely identified.
-
-    Verifies that the teampreview Pokemon names match exactly one entry
-    in the showteam data, which is necessary for accurate log parsing.
-
-    Args:
-        log: The battle log string.
-        player_role: Player role to check ("p1" or "p2").
-
-    Returns:
-        True if all Pokemon can be uniquely distinguished.
-    """
+    """Check that each preview Pokémon matches one entry in its open team sheet."""
     teampreview_mons = [
         Pokemon(9, details=dets)
         for dets in re.findall(r"\|poke\|" + player_role + r"\|([^,|]+)", log)
     ]
-    showteam = [
+    showteam = next(
         line for line in log.split("\n") if line.startswith(f"|showteam|{player_role}|")
-    ][0]
+    )
     showteam_names = [
         mon.split("|")[0] for mon in "|".join(showteam.split("|")[3:]).split("]")
     ]
@@ -121,21 +89,7 @@ def can_distinguish_team_members(log: str, player_role: str) -> bool:
 def get_battle_idents(
     num_battles: int, battle_format: str, oldest: int, newest: int | None
 ) -> set[str]:
-    """
-    Collect battle identifiers from Pokemon Showdown's replay search.
-
-    Queries the replay search API to find battle IDs, searching both
-    forward (newer than last seen) and backward (older than oldest seen).
-
-    Args:
-        num_battles: Target number of battle identifiers to collect.
-        battle_format: Pokemon Showdown format string.
-        oldest: Unix timestamp of the oldest known log.
-        newest: Unix timestamp of the newest known log (None if no logs yet).
-
-    Returns:
-        Set of battle identifier strings.
-    """
+    """Find replay IDs newer and older than the already downloaded range."""
     battle_idents = set()
     # Collecting games that happened after we first started collecting
     if newest is not None:
@@ -158,17 +112,7 @@ def get_battle_idents(
 def update_battle_idents(
     battle_idents: set[str], battle_format: str, oldest: int
 ) -> tuple[set[str], int]:
-    """
-    Fetch a page of battle identifiers from the replay search API.
-
-    Args:
-        battle_idents: Existing set of battle identifiers to update.
-        battle_format: Pokemon Showdown format string.
-        oldest: Timestamp to search before.
-
-    Returns:
-        Tuple of (updated battle_idents set, new oldest timestamp).
-    """
+    """Read one search page and return its IDs and oldest upload timestamp."""
     site = "https://replay.pokemonshowdown.com"
     response = requests.get(
         f"{site}/search.json?format={battle_format}&before={oldest + 1}"
@@ -182,15 +126,7 @@ def update_battle_idents(
 
 
 def get_log_json(ident: str) -> dict[str, Any] | None:
-    """
-    Fetch the full battle log JSON for a given battle identifier.
-
-    Args:
-        ident: Battle identifier string.
-
-    Returns:
-        Dictionary containing log data, or None if fetch failed.
-    """
+    """Fetch a replay JSON, or return None if the request failed."""
     site = "https://replay.pokemonshowdown.com"
     response = requests.get(f"{site}/{ident}.json")
     if response:
@@ -198,16 +134,7 @@ def get_log_json(ident: str) -> dict[str, Any] | None:
 
 
 def get_rating(log: str, role: str) -> int | None:
-    """
-    Extract a player's rating from a battle log.
-
-    Args:
-        log: The battle log string.
-        role: Player role ("p1" or "p2").
-
-    Returns:
-        Player's rating as an integer, or None if not available.
-    """
+    """Read a player rating from its protocol line, when present."""
     start_index = log.index(f"|player|{role}|")
     split_str = log[start_index : log.index("\n", start_index)].split("|")
     if len(split_str) > 5:
@@ -217,16 +144,7 @@ def get_rating(log: str, role: str) -> int | None:
 
 
 def main(num_workers: int, read_increment: int):
-    """
-    Main entry point for scraping battle logs.
-
-    Scrapes logs for all configured formats and prints statistics about
-    the collected data including rating distributions.
-
-    Args:
-        num_workers: Number of parallel download threads.
-        read_increment: Number of battles to search through per iteration.
-    """
+    """Download configured formats and print their rating distributions."""
     for fmt in FORMATS:
         done = False
         while not done:
@@ -243,7 +161,7 @@ def main(num_workers: int, read_increment: int):
             )
 
         max_date_epoch = max([t for t, _ in log_dict.values()])
-        dt = datetime.fromtimestamp(max_date_epoch, tz=timezone.utc)
+        dt = datetime.fromtimestamp(max_date_epoch, tz=UTC)
         timestr = dt.strftime("%m/%d/%Y %H:%M:%S")
         p1_unrated = len([log for log in logs if (get_rating(log, "p1") or 0) < 1000])
         p2_unrated = len([log for log in logs if (get_rating(log, "p2") or 0) < 1000])
@@ -269,7 +187,7 @@ total logs = {len(logs)}
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Scrapes logs into data/ folder")
+    parser = argparse.ArgumentParser(description="Download replay logs into battle_logs/")
     parser.add_argument(
         "--num_workers", type=int, default=1, help="number of parallel log scrapers"
     )

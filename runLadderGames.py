@@ -1,14 +1,4 @@
-"""Play Showdown ladder or direct-challenge games and learn from every battle.
-
-    export PS_USER=MyBotName PS_PASS=secret
-    python runLadderGames.py --format gen9championsvgc2026regmc --team teams/my_team.txt --games 50
-
-Automatically set up a local server and run two bots (no password needed):
-    python runLadderGames.py --local --format gen9doublescustomgame --team teams/example_team.txt --games 3
-
-Challenge a player directly:
-    python runLadderGames.py --team teams/my_team.txt --challenge Opponent --games 1
-"""
+"""Run public battles with learning, or manage local bot evaluations."""
 import argparse
 import asyncio
 import hashlib
@@ -20,13 +10,10 @@ import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 
-from bot import LearningVGCPlayer, Policy
 import evaluate as evaluation
+from bot import LearningVGCPlayer, Policy
 from local_server import DEFAULT_DIRECTORY, local_showdown
-from poke_env import (
-    AccountConfiguration,
-    ShowdownServerConfiguration,
-)
+from poke_env import AccountConfiguration, ShowdownServerConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +124,7 @@ async def main() -> None:
     server, account = ShowdownServerConfiguration, AccountConfiguration(user, pw)
 
     player = LearningVGCPlayer(
+        log_level=logging.WARNING,
         policy=policy, data_dir=args.data_dir, learn=not args.no_learn,
         prioritize_trick_room="_tr_" in Path(args.team).stem.lower(),
         lead_synergy=not args.no_lead_synergy,

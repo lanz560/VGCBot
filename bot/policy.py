@@ -14,8 +14,6 @@ import numpy as np
 
 from .features import (
     D_LEAD_SYNERGY,
-    D_MOVE,
-    D_TP,
     D_VALUE,
     VALUE_FEATURES,
     PAIR_FEATURES,
@@ -29,7 +27,7 @@ LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 1.1])
 
 
 def softmax(x: np.ndarray) -> np.ndarray:
-    z = x - x.max() 
+    z = x - x.max()
     e = np.exp(z)
     return e / e.sum()
 
@@ -49,7 +47,6 @@ class Trajectory:
     tp_rows: np.ndarray | None = None        # (n_mons, D_TP)
     tp_picks: list[int] = field(default_factory=list)
     tp_pair_synergy: np.ndarray | None = None
-    final_pot: float = 0.0
 
 
 class Policy:
@@ -78,7 +75,6 @@ class Policy:
         self.wins = 0
         self._load()
 
-    # ------------------------------------------------------------ acting
     def act(self, phi: np.ndarray, bias: np.ndarray | None = None) -> int:
         logits = phi @ self.w
         if bias is not None:
@@ -96,26 +92,28 @@ class Policy:
         remaining = list(range(len(rows)))
         picks: list[int] = []
         for _ in range(min(k, len(rows))):
-            scores = rows[remaining] @ self.w_tp
-            if len(picks) == 1 and pair_synergy is not None:
-                if pair_synergy.shape != (len(rows), len(rows), D_LEAD_SYNERGY):
-                    raise ValueError(
-                        "pair_synergy must have shape "
-                        f"({len(rows)}, {len(rows)}, {D_LEAD_SYNERGY})"
-                    )
-                scores = scores + (
-                    pair_synergy[picks[0], remaining] @ LEAD_SYNERGY_WEIGHTS
-                )
-            p = softmax(scores)
+            p = self._preview_probabilities(rows, remaining, picks, pair_synergy)
             j = int(self.rng.choice(len(remaining), p=p))
             picks.append(remaining.pop(j))
         return picks
 
-    # ---------------------------------------------------------- learning
+    def _preview_probabilities(self, rows, remaining, picks, pair_synergy):
+        scores = rows[remaining] @ self.w_tp
+        if len(picks) == 1 and pair_synergy is not None:
+            expected = (len(rows), len(rows), D_LEAD_SYNERGY)
+            if pair_synergy.shape != expected:
+                raise ValueError(f"pair_synergy must have shape {expected}")
+            scores += pair_synergy[picks[0], remaining] @ LEAD_SYNERGY_WEIGHTS
+        return softmax(scores)
+
+    def _outcome(self, won: bool | None) -> float:
+        if won is None:
+            return 0.0
+        return self.terminal_reward if won else -self.terminal_reward
+
     def returns(self, traj: Trajectory, won: bool | None) -> np.ndarray:
         """Discount-consistent shaping, with zero potential at terminal states."""
-        outcome = (0.0 if won is None else
-                   self.terminal_reward if won else -self.terminal_reward)
+        outcome = self._outcome(won)
         rewards = np.zeros(len(traj.steps))
         for t, step in enumerate(traj.steps):
             next_pot = traj.steps[t + 1].pot if t + 1 < len(traj.steps) else 0.0
@@ -139,7 +137,7 @@ class Policy:
         self.battles_seen += 1
         self.wins += won is True
         returns = self.returns(traj, won)
-        outcome = 0.0 if won is None else self.terminal_reward if won else -self.terminal_reward
+        outcome = self._outcome(won)
         stats = {"turns": len(traj.steps),
                  "return0": float(returns[0]) if len(returns) else float(outcome),
                  "updated": False, "pending_battles": len(self._pending)}
@@ -157,7 +155,7 @@ class Policy:
             samples.extend(traj.steps)
             targets.extend(returns)
             if traj.tp_rows is not None and traj.tp_picks:
-                outcome = 0.0 if won is None else self.terminal_reward if won else -self.terminal_reward
+                outcome = self._outcome(won)
                 preview.append((traj, float(returns[0]) if len(returns) else outcome))
 
         old_w = self.w.copy()
@@ -205,14 +203,9 @@ class Policy:
                 remaining = list(range(len(traj.tp_rows)))
                 grad = np.zeros_like(self.w_tp)
                 for pick_index, pick in enumerate(traj.tp_picks):
-                    scores = traj.tp_rows[remaining] @ self.w_tp
-                    if pick_index == 1 and traj.tp_pair_synergy is not None:
-                        expected = (len(traj.tp_rows), len(traj.tp_rows), D_LEAD_SYNERGY)
-                        if traj.tp_pair_synergy.shape != expected:
-                            raise ValueError(f"tp_pair_synergy must have shape {expected}")
-                        scores += (traj.tp_pair_synergy[traj.tp_picks[0], remaining]
-                                   @ LEAD_SYNERGY_WEIGHTS)
-                    prob = softmax(scores)
+                    prob = self._preview_probabilities(
+                        traj.tp_rows, remaining, traj.tp_picks[:pick_index], traj.tp_pair_synergy
+                    )
                     grad += traj.tp_rows[pick] - prob @ traj.tp_rows[remaining]
                     remaining.remove(pick)
                 gradient += advantage * grad / len(traj.tp_picks)
@@ -235,7 +228,6 @@ class Policy:
         stats["updates"] = self.updates
         return stats
 
-    # ------------------------------------------------------------- disk
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         blob = {
@@ -251,7 +243,7 @@ class Policy:
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(blob, indent=1))
         tmp.replace(self.path)
- 
+
     def _load(self) -> None:
         if not self.path.exists():
             return

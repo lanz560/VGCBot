@@ -10,6 +10,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import platform
 from datetime import UTC, datetime
@@ -109,6 +110,7 @@ async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
             policy = Policy(entry["weights"], seed=2 * seed + offset)
             team = Path(entry["team"]).read_text()
             players.append(LearningVGCPlayer(
+                log_level=logging.WARNING,
                 policy=policy, learn=False, data_dir=directory / label,
                 team_id=entry["sha256"]["team"],
                 lead_synergy=entry["lead_synergy"],

@@ -5,7 +5,7 @@ from poke_env.battle import PokemonType
 from poke_env.battle.field import Field
 from poke_env.battle.move import Move
 
-from bot.features import _effective_base_power, _bp_after_terrian as _effective_move
+from bot.features import _effective_base_power, _terrain_effects
 
 
 class EffectiveBasePowerTests(unittest.TestCase):
@@ -60,7 +60,7 @@ class EffectiveBasePowerTests(unittest.TestCase):
         for terrain, expected_type, expected_multiplier in terrain_types:
             with self.subTest(terrain=terrain):
                 battle = SimpleNamespace(fields={terrain})
-                bp, move_type, multiplier = _effective_move(
+                bp, move_type, multiplier = _terrain_effects(
                     user, move, user, battle
                 )
                 self.assertEqual(bp, 100)
@@ -72,13 +72,13 @@ class EffectiveBasePowerTests(unittest.TestCase):
             current_hp_fraction=1.0, types=(), ability=None, item=None
         )
         psychic_battle = SimpleNamespace(fields={Field.PSYCHIC_TERRAIN})
-        bp, move_type, multiplier = _effective_move(
+        bp, move_type, multiplier = _terrain_effects(
             grounded, Move("expandingforce", 9), grounded, psychic_battle
         )
         self.assertEqual((bp, move_type, multiplier), (120, PokemonType.PSYCHIC, 1.3))
 
         electric_battle = SimpleNamespace(fields={Field.ELECTRIC_TERRAIN})
-        bp, move_type, multiplier = _effective_move(
+        bp, move_type, multiplier = _terrain_effects(
             grounded, Move("risingvoltage", 9), grounded, electric_battle
         )
         self.assertEqual((bp, move_type, multiplier), (140, PokemonType.ELECTRIC, 1.3))
@@ -89,7 +89,7 @@ class EffectiveBasePowerTests(unittest.TestCase):
             ability=None,
             item=None,
         )
-        bp, _, _ = _effective_move(
+        bp, _, _ = _terrain_effects(
             grounded, Move("risingvoltage", 9), airborne, electric_battle
         )
         self.assertEqual(bp, 70)
@@ -100,7 +100,7 @@ class EffectiveBasePowerTests(unittest.TestCase):
         )
         move = Move("mistyexplosion", 9)
         battle = SimpleNamespace(fields={Field.MISTY_TERRAIN})
-        bp, move_type, multiplier = _effective_move(grounded, move, grounded, battle)
+        bp, move_type, multiplier = _terrain_effects(grounded, move, grounded, battle)
         self.assertEqual((bp, move_type, multiplier), (150, PokemonType.FAIRY, 1.0))
 
         airborne = SimpleNamespace(
@@ -109,7 +109,7 @@ class EffectiveBasePowerTests(unittest.TestCase):
             ability=None,
             item=None,
         )
-        bp, _, _ = _effective_move(airborne, move, airborne, battle)
+        bp, _, _ = _terrain_effects(airborne, move, airborne, battle)
         self.assertEqual(bp, 100)
 
 

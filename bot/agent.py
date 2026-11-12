@@ -40,7 +40,6 @@ class LearningVGCPlayer(Player):
         self._traj: dict[str, Trajectory] = {}
         self._lead_picks: dict[str, list[str]] = {}
 
-    # ------------------------------------------------------------ team preview
     def teampreview(self, battle) -> str:
         try:
             rows = F.teampreview_features(battle)
@@ -58,9 +57,10 @@ class LearningVGCPlayer(Player):
             )
             for i in picks:
                 mons[i]._selected_in_teampreview = True
-            traj = self._traj.setdefault(battle.battle_tag, Trajectory())
-            traj.tp_rows, traj.tp_picks = rows, picks
-            traj.tp_pair_synergy = pair_synergy
+            if self.learning_enabled:
+                traj = self._traj.setdefault(battle.battle_tag, Trajectory())
+                traj.tp_rows, traj.tp_picks = rows, picks
+                traj.tp_pair_synergy = pair_synergy
             return "/team " + "".join(str(i + 1) for i in picks)
         except Exception:
             log.exception("teampreview failed, falling back to random")
@@ -82,31 +82,6 @@ class LearningVGCPlayer(Player):
                 for message in split_messages
             )
         )
-        if split_messages and split_messages[0]:
-            room_header = split_messages[0][0]
-            if room_header.startswith(">battle-"):
-                result = next(
-                    (
-                        message for message in split_messages[1:]
-                        if len(message) > 1 and message[1] in ("win", "tie")
-                    ),
-                    None,
-                )
-                if result is not None:
-                    if result[1] == "tie":
-                        outcome = "tied"
-                    else:
-                        outcome = (
-                            "Another victory under my belt." if result[2].casefold() == self.username.casefold()
-                            else " My training continues..."
-                        )
-                    try:
-                        await self.ps_client.send_message(
-                            f"{outcome}", room_header[1:]
-                        )
-                    except Exception:
-                        log.exception("failed to send battle result to chat")
-
         await super()._handle_battle_message(split_messages)
         if ots_timeout and split_messages and split_messages[0]:
             room_header = split_messages[0][0]
@@ -119,7 +94,6 @@ class LearningVGCPlayer(Player):
                     )
                     await self._handle_battle_request(battle)
 
-    # ------------------------------------------------------------------ moves
     def choose_move(self, battle):
         if not isinstance(battle, DoubleBattle):
             return self.choose_random_move(battle)
@@ -129,43 +103,33 @@ class LearningVGCPlayer(Player):
             orders, phi = F.build_candidates(battle)
             if not orders:
                 return self.choose_random_move(battle)
-            trick_room_counts = [
-                sum(getattr(single_order.order, "id", None) == "trickroom"
-                    for single_order in (order.first_order, order.second_order))
-                for order in orders
-            ]
-            bias = [0.0] * len(orders)
+            bias = np.zeros(len(orders))
             if self.prioritize_trick_room and Field.TRICK_ROOM not in battle.fields:
-                eligible = [i for i, count in enumerate(trick_room_counts) if count <= 1]
-                if eligible:
+                counts = np.array([
+                    sum(getattr(single.order, "id", None) == "trickroom"
+                        for single in (order.first_order, order.second_order))
+                    for order in orders
+                ])
+                eligible = np.flatnonzero(counts <= 1)
+                if len(eligible):
                     orders = [orders[i] for i in eligible]
-                    phi = phi[eligible]
-                    trick_room_counts = [trick_room_counts[i] for i in eligible]
-                    bias = [0.0] * len(orders)
-                for i, count in enumerate(trick_room_counts):
-                    if count == 1:
-                        # The team preference should not reward hurting our speed order.
-                        bias[i] = 3.0 * phi[i, F.F_S + F.P["speed_control_gain"]]
-            bias_array = np.asarray(bias)
-            idx = self.policy.act(phi, bias_array)
+                    phi, counts = phi[eligible], counts[eligible]
+                gain = phi[:, F.F_S + F.P["speed_control_gain"]]
+                bias = np.where(counts == 1, 3.0 * gain, 0.0)
+            idx = self.policy.act(phi, bias)
             if self.learning_enabled:
                 summ = F.state_summary(battle)
                 self._traj.setdefault(battle.battle_tag, Trajectory()).steps.append(
                     Step(phi=phi, chosen=idx, psi=summ["psi"], pot=summ["pot"],
-                         bias=bias_array)
+                         bias=bias)
                 )
             return orders[idx]
         except Exception:
             log.exception("choose_move failed, falling back to random")
             return self.choose_random_move(battle)
 
-    # ---------------------------------------------------------------- learning
     def _battle_finished_callback(self, battle) -> None:
         traj = self._traj.pop(battle.battle_tag, Trajectory())
-        try:
-            traj.final_pot = F.state_summary(battle)["pot"]
-        except Exception:
-            traj.final_pot = traj.steps[-1].pot if traj.steps else 0.0
         won = battle.won
         stats = {}
         if self.learning_enabled:

@@ -53,13 +53,14 @@ class BatchLearningTests(unittest.TestCase):
             self.assertEqual(policy.flush(), {})
             self.assertEqual(policy.updates, 1)
 
-    def test_discounted_shaping_telescopes_and_terminal_hp_does_not_change_objective(self):
+    def test_discounted_shaping_telescopes_and_intermediate_hp_does_not_change_objective(self):
         with tempfile.TemporaryDirectory() as directory:
             policy = Policy(Path(directory) / 'weights.json', gamma=0.9, shaping_scale=0.25)
             traj = trajectory(potentials=(0.2, -0.8, 0.7))
             expected = 0.9 ** 2 - 0.25 * 0.2
             self.assertAlmostEqual(policy.returns(traj, True)[0], expected)
-            traj.final_pot = -100
+            traj.steps[1].pot = -0.1
+            traj.steps[2].pot = 0.2
             self.assertAlmostEqual(policy.returns(traj, True)[0], expected)
             policy.shaping_scale = 0
             np.testing.assert_allclose(policy.returns(traj, False), [-0.81, -0.9, -1])

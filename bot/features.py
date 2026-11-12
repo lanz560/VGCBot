@@ -1,9 +1,4 @@
-"""Turn a poke-env DoubleBattle into numeric features.
-
-Everything here is a cheap *estimate* (no full damage calc, because opponent
-EVs/items are usually unknown on ladder). The policy learns how much to trust
-each signal, so rough is fine as long as it is consistent.
-"""
+"""Action/state features using approximate damage, speed, and matchup estimates."""
 from __future__ import annotations
 
 from typing import Literal
@@ -11,11 +6,11 @@ from typing import Literal
 import numpy as np
 from poke_env.battle import Pokemon, PokemonType
 from poke_env.battle.field import Field
-from poke_env.battle.weather import Weather
 from poke_env.battle.move import Move
 from poke_env.battle.move_category import MoveCategory
 from poke_env.battle.side_condition import SideCondition
 from poke_env.battle.status import Status
+from poke_env.battle.weather import Weather
 from poke_env.player.battle_order import (
     DefaultBattleOrder,
     DoubleBattleOrder,
@@ -23,7 +18,6 @@ from poke_env.player.battle_order import (
     SingleBattleOrder,
 )
 
-# ---------------------------------------------------------------- feature names
 SINGLE_FEATURES = [
     "dmg_frac",          # expected damage as a fraction of target's *current* HP (capped at 1 per target)
     "ko",                # number of foes this move likely KOs
@@ -87,8 +81,7 @@ VALUE_FEATURES = [
 ]
 D_VALUE = len(VALUE_FEATURES)
 
-# Sensible starting point so the bot is competent from battle #1. Learning
-# moves the weights away from this; a small L2 pull keeps them from running off.
+# Initial scoring weights and regularization targets.
 PRIOR_MOVE = np.zeros(D_MOVE)
 for k, v in {
     "dmg_frac": 3.0, "ko": 2.0, "ally_dmg": -3.5, "wasted_attack": -4.0,
@@ -147,7 +140,6 @@ def classify_role(mon: Pokemon) -> Literal["offensive", "support", "setup", "mix
         return "mix"
     return "offensive"
 
-# --------------------------------------------------------------------- helpers
 def _boost_mult(stage: int) -> float:
     return (2 + stage) / 2 if stage >= 0 else 2 / (2 - stage)
 
@@ -226,10 +218,9 @@ def _grounded(mon: Pokemon, battle) -> bool:
     )
 
 
-#TODO add in niche moves like flail, reversal, crush grip, wring out etc
 def _effective_base_power(att: Pokemon, move: Move) -> float:
-    '''Calculates base power for variable moves'''
-    if move.id == "eruption" or move.id == "waterspout"  :
+    """Scale Eruption/Water Spout by current HP; use metadata for other moves."""
+    if move.id in ("eruption", "waterspout"):
         return max(1, int(150 * att.current_hp_fraction))
     return move.base_power or (60 if move.category != MoveCategory.STATUS else 0)
 
@@ -242,7 +233,7 @@ _TERRAIN_TYPES = {
 }
 
 
-def _bp_after_terrian(att: Pokemon, move: Move, dfn: Pokemon, battle):
+def _terrain_effects(att: Pokemon, move: Move, dfn: Pokemon, battle):
     """Return (base power, type, terrain damage multiplier) after terrain effects."""
     bp = _effective_base_power(att, move)
     move_type = move.type
@@ -278,78 +269,57 @@ def _bp_after_terrian(att: Pokemon, move: Move, dfn: Pokemon, battle):
     terrain_multiplier = 1.0
     if attacker_grounded and terrain is not None:
         terrain_type = _TERRAIN_TYPES[terrain]
-        if terrain_type in (PokemonType.ELECTRIC, PokemonType.GRASS, PokemonType.PSYCHIC):
-            if move_type == terrain_type:
+        if terrain_type in (PokemonType.ELECTRIC, PokemonType.GRASS, PokemonType.PSYCHIC) and move_type == terrain_type:
                 terrain_multiplier = 1.3
 
     return bp, move_type, terrain_multiplier
 
 
-
-#partially sloppy code but it should work 
 def weather_multiplier(move: Move, move_type: PokemonType, dfn: Pokemon, battle):
-    """returns bp multiplier dependent on weather."""
-  
+    """Return the estimated weather damage multiplier and effective move type."""
     weather = battle.weather
-    multiplier = 1.0
-    wb, sb = False, False
-    
     if not weather:
         return 1.0, move_type
-    #for move weatherball that doubles power and type 
-    elif move.id == "weatherball":
-        multiplier *= 2.0
-        wb = True
-    elif move.id == "solarbeam":
-        sb = True
+
+    weather_ball = move.id == "weatherball"
+    solar_beam = move.id == "solarbeam"
+    defender_types = (dfn._type_1, dfn._type_2)
+    multiplier = 2.0 if weather_ball else 1.0
 
     if Weather.RAINDANCE in weather:
-        if wb:
+        if weather_ball:
             move_type = PokemonType.WATER
-        if move_type == PokemonType.FIRE or sb:
+        if move_type == PokemonType.FIRE or solar_beam:
             multiplier *= 0.5
         elif move_type == PokemonType.WATER:
             multiplier *= 1.5
     elif Weather.SUNNYDAY in weather:
-        if wb:
-                move_type = PokemonType.FIRE
+        if weather_ball:
+            move_type = PokemonType.FIRE
         if move_type == PokemonType.FIRE:
-                multiplier *= 1.5
+            multiplier *= 1.5
         elif move_type == PokemonType.WATER:
-                multiplier *= 0.5
-    
-    #TODO this code does not cover the edge cases of moves like psyshock and secret sword 
-    elif Weather.SNOWSCAPE in weather:
-        if wb:
-            move_type = PokemonType.ICE
-        if sb:
             multiplier *= 0.5
-        if (dfn._type_1  == PokemonType.ICE or dfn._type_2 == PokemonType.ICE) and move.category == MoveCategory.PHYSICAL:
+    elif Weather.SNOWSCAPE in weather:
+        if weather_ball:
+            move_type = PokemonType.ICE
+        if solar_beam:
+            multiplier *= 0.5
+        if PokemonType.ICE in defender_types and move.category == MoveCategory.PHYSICAL:
             multiplier *= 0.67
     elif Weather.SANDSTORM in weather:
-        if sb:
+        if solar_beam:
             multiplier *= 0.5
-        if (dfn._type_1  == PokemonType.ROCK or dfn._type_2 == PokemonType.ROCK) and move.category == MoveCategory.SPECIAL:
+        if PokemonType.ROCK in defender_types and move.category == MoveCategory.SPECIAL:
             multiplier *= 0.67
 
-
-
-    
     return multiplier, move_type
-
-    
-
 
 
 def move_frac(att: Pokemon, move: Move, dfn: Pokemon, battle) -> float:
-  
-    bp, move_type, terrain = _bp_after_terrian(att, move, dfn, battle)
+    bp, move_type, terrain = _terrain_effects(att, move, dfn, battle)
     weather, move_type = weather_multiplier(move, move_type, dfn, battle)
-    return (
-        calc_frac(att, move_type, move.category, bp, dfn)
-        * terrain
-        * weather
-    )
+    return calc_frac(att, move_type, move.category, bp, dfn) * terrain * weather
 
 
 def incoming_threat(attacker: Pokemon, defender: Pokemon, battle) -> float:
@@ -365,7 +335,7 @@ def incoming_threat(attacker: Pokemon, defender: Pokemon, battle) -> float:
     return best
 
 
-def _alive(mon):  # noqa: ANN001
+def _alive(mon: Pokemon | None) -> bool:
     return mon is not None and not mon.fainted
 
 
@@ -387,8 +357,6 @@ def matchup(battle, mon: Pokemon) -> float:
     dfn = np.mean([min(1.0, incoming_threat(o, mon, battle)) for o in foes])
     return float(off - dfn)
 
-
-# ------------------------------------------------------------ per-action features
 def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     v = np.zeros(F_S)
     aux = {"kind": "other", "tgt": None, "ko": 0, "dmg": 0.0,
@@ -398,7 +366,6 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     me = battle.active_pokemon[slot]
     thing = order.order
 
-    # ------------------------------ switch
     if isinstance(thing, Pokemon):
         aux["kind"] = "switch"
         m = matchup(battle, thing)
@@ -482,7 +449,6 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
             v[S["ally_dmg"]] += part
     aux["kind"] = "attack" if attacking else "status"
 
-    # ------------------------------ non-damage behaviour
     if not attacking:
         v[S["status_move"]] = 1.0
     if move.is_protect_move:
@@ -628,8 +594,6 @@ def build_candidates(battle):
         return [], np.zeros((0, D_MOVE))
     return orders, np.vstack(rows)
 
-
-# --------------------------------------------------------------- team preview
 def teampreview_features(battle) -> np.ndarray:
     mine = list(battle.team.values())
     theirs = battle.teampreview_opponent_team or list(battle.opponent_team.values())
@@ -699,8 +663,6 @@ def teampreview_pair_synergy(battle) -> np.ndarray:
 
     return synergy
 
-
-# ------------------------------------------------------ battle state / shaping
 def _team_mons(battle) -> list[Pokemon]:
     mons = list(battle.team.values())
     chosen = [m for m in mons if getattr(m, "_selected_in_teampreview", False)]
