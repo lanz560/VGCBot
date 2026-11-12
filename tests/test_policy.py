@@ -5,7 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
-from bot.features import D_LEAD_SYNERGY, D_MOVE, D_TP, PRIOR_MOVE
+from bot.features import D_LEAD_SYNERGY, D_MOVE, D_TP, D_VALUE, PRIOR_MOVE
 from bot.policy import Policy, Step, Trajectory, softmax
 
 
@@ -18,11 +18,11 @@ class PolicyLearningTests(unittest.TestCase):
                 "w_tp": [0.0] * D_TP,
                 "v": [0.0] * 5,
             }))
-            policy = Policy(weights_path, lr=0.1, prior_pull=0.0)
+            policy = Policy(weights_path, lr=0.1, prior_pull=0.0, batch_size=1)
             phi = np.zeros((2, D_MOVE))
             phi[1, 0] = 1.0
             trajectory = Trajectory(steps=[
-                Step(phi, 0, np.zeros(5), 0.0, np.array([0.0, 2.0]))
+                Step(phi, 0, np.zeros(D_VALUE), 0.0, np.array([0.0, 2.0]))
             ])
 
             policy.learn(trajectory, won=True)
@@ -37,7 +37,7 @@ class PolicyLearningTests(unittest.TestCase):
     def test_team_preview_learning_uses_pair_synergy(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy = Policy(
-                Path(temp_dir) / "weights.json", lr=0.05, prior_pull=0.0
+                Path(temp_dir) / "weights.json", lr=0.05, prior_pull=0.0, batch_size=1
             )
             policy.w_tp[:] = 0.0
             rows = np.zeros((3, D_TP))

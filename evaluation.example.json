@@ -1,0 +1,30 @@
+{
+  "format": "gen9doublescustomgame",
+  "games_per_matchup": 20,
+  "seeds": [1, 2, 3],
+  "accept_open_team_sheet": false,
+  "variants": [
+    {
+      "name": "baseline",
+      "team": "teams/team2_tr_.txt",
+      "weights": "data/checkpoints/baseline.json"
+    },
+    {
+      "name": "candidate",
+      "team": "teams/team2_tr_.txt",
+      "weights": "data/checkpoints/candidate.json"
+    }
+  ],
+  "opponents": [
+    {
+      "name": "frozen-team1",
+      "team": "teams/team1.txt",
+      "weights": "data/checkpoints/opponent.json"
+    },
+    {
+      "name": "frozen-trick-room",
+      "team": "teams/team2_tr_.txt",
+      "weights": "data/checkpoints/opponent.json"
+    }
+  ]
+}

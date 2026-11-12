@@ -222,3 +222,5 @@ __marimo__/
 # Generated battle and training data
 /battle_logs/
 /data/
+
+notes.md

@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import hashlib
 import logging
+import math
 import os
 from pathlib import Path
 
@@ -34,6 +35,11 @@ async def main() -> None:
     ap.add_argument("--weights", help="policy weights file (defaults to <data-dir>/weights.json)")
     ap.add_argument("--seed", type=int, help="random seed for reproducible policy sampling")
     ap.add_argument("--no-learn", action="store_true", help="freeze weights (evaluation mode)")
+    ap.add_argument("--batch-size", type=int, default=16,
+                    help="completed battles per update; final partial batch is flushed")
+    ap.add_argument("--gamma", type=float, default=0.99, help="return discount in [0, 1]")
+    ap.add_argument("--shaping-scale", type=float, default=0.25,
+                    help="HP potential shaping strength; 0 trains from outcomes only")
     ap.add_argument("--no-lead-synergy", action="store_true",
                     help="disable pairwise lead synergy preferences for an A/B comparison")
     ap.add_argument("--local", action="store_true", help="use a local Showdown server on :8000")
@@ -42,13 +48,18 @@ async def main() -> None:
                          "in a format that has no OTS rule)")
     ap.add_argument("--save-replays", action="store_true")
     args = ap.parse_args()
+    if args.games < 1 or args.batch_size < 1:
+        ap.error("--games and --batch-size must be positive")
+    if not 0 <= args.gamma <= 1 or not math.isfinite(args.shaping_scale) or args.shaping_scale < 0:
+        ap.error("--gamma must be in [0, 1] and --shaping-scale nonnegative")
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     team_path = Path(args.team)
     team = team_path.read_text()
     team_id = hashlib.sha256(team.encode()).hexdigest()
     weights_path = Path(args.weights) if args.weights else Path(args.data_dir) / "weights.json"
-    policy = Policy(weights_path, seed=args.seed)
+    policy = Policy(weights_path, seed=args.seed, batch_size=args.batch_size,
+                    gamma=args.gamma, shaping_scale=args.shaping_scale)
 
     if args.local:
         server, account = LocalhostServerConfiguration, None
@@ -67,12 +78,21 @@ async def main() -> None:
         battle_format=args.format, team=team, max_concurrent_battles=1,
         accept_open_team_sheet=("vgc" in args.format and not args.no_ots), save_replays=str(Path(args.data_dir) / "replays") if args.save_replays else False,
     )
-    if args.challenge is not None:
-        await player.send_challenges(args.challenge, args.games)
-    else:
-        await player.ladder(args.games)
+    try:
+        if args.challenge is not None:
+            await player.send_challenges(args.challenge, args.games)
+        else:
+            await player.ladder(args.games)
+    finally:
+        try:
+            if not args.no_learn:
+                stats = policy.flush()
+                if stats:
+                    logging.info("Final batch: %s", stats)
+        finally:
+            await player.ps_client.stop_listening()
     print(f"Done. {player.n_won_battles}/{player.n_finished_battles} won this session. "
-          f"Weights saved to {policy.path}")
+          + (f"Weights saved to {policy.path}" if not args.no_learn else "Weights frozen."))
 
 
 if __name__ == "__main__":

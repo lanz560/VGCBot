@@ -57,6 +57,12 @@ PAIR_FEATURES = [
     "double_protect",
     "double_switch",
     "double_status",
+    "speed_control_gain",  # change in favorable active speed matchups
+    "helping_hand_damage", # extra capped damage from the partner's attack
+    "helping_hand_ko",     # additional estimated KOs enabled by Helping Hand
+    "redirect_protection", # redirectable threat to a vulnerable acting partner
+    "setup_safety",        # useful uncapped boosts weighted by survival estimate
+    "setup_risk",          # incoming threat while spending a turn setting up
 ]
 F_S, F_P = len(SINGLE_FEATURES), len(PAIR_FEATURES)
 D_MOVE = F_S + F_P
@@ -74,6 +80,12 @@ LEAD_SYNERGY_FEATURES = [
     "psychic_terrain_expanding_force",
 ]
 D_LEAD_SYNERGY = len(LEAD_SYNERGY_FEATURES)
+VALUE_FEATURES = [
+    "bias", "potential", "my_remaining", "opp_remaining", "turn",
+    "my_active_hp", "opp_active_hp", "active_matchup", "speed_advantage",
+    "my_tailwind", "opp_tailwind", "trick_room",
+]
+D_VALUE = len(VALUE_FEATURES)
 
 # Sensible starting point so the bot is competent from battle #1. Learning
 # moves the weights away from this; a small L2 pull keeps them from running off.
@@ -92,6 +104,9 @@ for k, v in {
 for k, v in {
     "focus_fire": 0.4, "overkill": -1.0, "combo_ko": 1.0,
     "double_protect": -2.0, "double_switch": -1.0, "double_status": -0.6,
+    "speed_control_gain": 2.0, "helping_hand_damage": 3.0,
+    "helping_hand_ko": 2.0, "redirect_protection": 1.0,
+    "setup_safety": 0.8, "setup_risk": -1.0,
 }.items():
     PRIOR_MOVE[F_S + P[k]] = v
 
@@ -376,7 +391,8 @@ def matchup(battle, mon: Pokemon) -> float:
 # ------------------------------------------------------------ per-action features
 def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
     v = np.zeros(F_S)
-    aux = {"kind": "other", "tgt": None, "ko": 0, "dmg": 0.0, "protect": False}
+    aux = {"kind": "other", "tgt": None, "ko": 0, "dmg": 0.0,
+           "protect": False, "hits": [], "move": None}
     if not isinstance(order, SingleBattleOrder) or isinstance(order, (PassBattleOrder, DefaultBattleOrder)):
         return v, aux
     me = battle.active_pokemon[slot]
@@ -399,8 +415,12 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
         return v, aux
 
     move: Move = thing
+    aux["move"] = move
     mid = move.id
     kind = move.entry.get("target", "normal")
+    if (move.id == "expandingforce" and Field.PSYCHIC_TERRAIN in battle.fields
+            and _grounded(me, battle)):
+        kind = "allAdjacentFoes"
     foes = battle.opponent_active_pokemon
     ally = battle.active_pokemon[1 - slot]
     my_spe = speed(me, battle, True)
@@ -427,6 +447,9 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
                 targets = [(battle.active_pokemon[-t - 1], 1.0, False)]
         if not targets or all(t[0] is None or t[0].fainted for t in targets):
             v[S["wasted_attack"]] = 1.0
+        # Spread reduction only applies when multiple living targets are hit.
+        if sum(_alive(t[0]) for t in targets) == 1:
+            targets = [(mon, 1.0, foe) for mon, _, foe in targets]
 
     acc = 1.0 if move.accuracy is True else float(move.accuracy or 1.0)
     for tmon, mult, is_foe in targets:
@@ -436,6 +459,7 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
         cur = max(tmon.current_hp_fraction, 0.02)
         part = min(1.0, frac / cur)
         if is_foe:
+            aux["hits"].append((frac / cur, acc))
             v[S["dmg_frac"]] += acc * part
             if frac >= 0.95 * cur and acc >= 0.85:
                 v[S["ko"]] += 1
@@ -469,7 +493,8 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
         aux["protect"] = True
     if mid == "fakeout":
         v[S["fake_out_ok" if me.first_turn else "fake_out_bad"]] = 1.0
-    if mid in SPEED_CONTROL:
+    # Tailwind/Trick Room get a contextual gain instead of an unconditional bonus.
+    if mid in SPEED_CONTROL - {"tailwind", "trickroom"}:
         v[S["speed_control"]] = 1.0
     if mid in REDIRECT:
         v[S["redirect"]] = 1.0
@@ -499,6 +524,78 @@ def pair_features(a1: dict, a2: dict) -> np.ndarray:
     return p
 
 
+def speed_control_gain(battle, moves: list[Move]) -> float:
+    """Change in fraction of active speed matchups won; ignores move priority."""
+    mine = [speed(m, battle, True) for m in battle.active_pokemon if _alive(m)]
+    foes = [speed(m, battle, False) for m in battle.opponent_active_pokemon if _alive(m)]
+    if not mine or not foes:
+        return 0.0
+    before = np.mean([a > b for a in mine for b in foes])
+    if (any(m.id == "tailwind" for m in moves)
+            and SideCondition.TAILWIND not in battle.side_conditions):
+        mine = [a * 2 for a in mine]
+    if sum(m.id == "trickroom" for m in moves) % 2:
+        mine, foes = [-a for a in mine], [-b for b in foes]
+    return float(np.mean([a > b for a in mine for b in foes]) - before)
+
+
+def contextual_pair_features(battle, a1: dict, a2: dict) -> np.ndarray:
+    """Support/setup estimates for the submitted pair, without simulating a turn."""
+    p = np.zeros(F_P)
+    actions = [a1, a2]
+    moves = [a["move"] for a in actions if a["move"] is not None]
+    p[P["speed_control_gain"]] = speed_control_gain(battle, moves)
+    for slot, action in enumerate(actions):
+        move = action["move"]
+        me = battle.active_pokemon[slot]
+        partner = actions[1 - slot]
+        ally = battle.active_pokemon[1 - slot]
+        if move is None or not _alive(me):
+            continue
+        if move.id == "helpinghand" and partner["kind"] == "attack":
+            for damage, accuracy in partner["hits"]:
+                p[P["helping_hand_damage"]] += accuracy * (
+                    min(1.0, 1.5 * damage) - min(1.0, damage))
+                if damage < 0.95 <= 1.5 * damage and accuracy >= 0.85:
+                    p[P["helping_hand_ko"]] += 1
+        if (move.id in REDIRECT and _alive(ally)
+                and partner["kind"] in ("attack", "status") and not partner["protect"]):
+            # Only known redirectable attacks count; no bonus against spread moves.
+            incoming = 0.0
+            for foe in battle.opponent_active_pokemon:
+                if not _alive(foe):
+                    continue
+                if move.id == "ragepowder" and (
+                    PokemonType.GRASS in foe.types or foe.ability == "overcoat"
+                    or foe.item == "safetygoggles"
+                ):
+                    continue
+                hits = [move_frac(foe, m, ally, battle)
+                        for m in (foe.moves or {}).values()
+                        if m.category != MoveCategory.STATUS
+                        and m.entry.get("target") in ("normal", "any", "adjacentFoe")
+                        and not (m.id == "expandingforce"
+                                 and Field.PSYCHIC_TERRAIN in battle.fields
+                                 and _grounded(foe, battle))]
+                incoming += max(hits, default=0.0)
+            partner_threat = min(1.0, incoming / max(ally.current_hp_fraction, 0.05))
+            p[P["redirect_protection"]] += partner_threat * (1 - threat_to(battle, me))
+        if move.id in SETUP_MOVES:
+            # Only value boosts that can still rise and have a relevant attack.
+            categories = {m.category for m in (me.moves or {}).values()}
+            useful = 0.0
+            for stat, boost in (move.boosts or {}).items():
+                relevant = (stat not in ("atk", "spa") or
+                            (stat == "atk" and MoveCategory.PHYSICAL in categories) or
+                            (stat == "spa" and MoveCategory.SPECIAL in categories))
+                if boost > 0 and relevant:
+                    useful += max(0, min(boost, 6 - me.boosts.get(stat, 0)))
+            danger = threat_to(battle, me)
+            p[P["setup_safety"]] += min(1.0, useful / 2) * (1 - danger)
+            p[P["setup_risk"]] += danger
+    return p
+
+
 def build_candidates(battle):
     """All legal joint orders with their feature rows.
 
@@ -523,7 +620,10 @@ def build_candidates(battle):
             if isinstance(o1.order, Pokemon) and o1.order is o2.order:
                 continue
             orders.append(DoubleBattleOrder(first_order=o1, second_order=o2))
-            rows.append(np.concatenate([v1 + v2, pair_features(a1, a2)]))
+            rows.append(np.concatenate([
+                v1 + v2,
+                pair_features(a1, a2) + contextual_pair_features(battle, a1, a2),
+            ]))
     if not orders:
         return [], np.zeros((0, D_MOVE))
     return orders, np.vstack(rows)
@@ -616,5 +716,19 @@ def state_summary(battle) -> dict:
     my_f = sum(m.fainted for m in mine)
     opp_f = sum(m.fainted for m in battle.opponent_team.values())
     pot = (opp_lost - my_lost) / n
-    psi = np.array([1.0, pot, (n - my_f) / n, (n - opp_f) / n, min(battle.turn, 30) / 30])
+    active = [m for m in battle.active_pokemon if _alive(m)]
+    foes = [m for m in battle.opponent_active_pokemon if _alive(m)]
+    speed_advantage = (float(np.mean([
+        speed(m, battle, True) > speed(o, battle, False) for m in active for o in foes
+    ])) if active and foes else 0.5)
+    psi = np.array([
+        1.0, pot, (n - my_f) / n, (n - opp_f) / n, min(battle.turn, 30) / 30,
+        sum(m.current_hp_fraction for m in active) / 2,
+        sum(m.current_hp_fraction for m in foes) / 2,
+        float(np.mean([matchup(battle, m) for m in active])) if active else 0.0,
+        speed_advantage,
+        float(SideCondition.TAILWIND in battle.side_conditions),
+        float(SideCondition.TAILWIND in battle.opponent_side_conditions),
+        float(Field.TRICK_ROOM in battle.fields),
+    ])
     return {"pot": float(pot), "psi": psi}

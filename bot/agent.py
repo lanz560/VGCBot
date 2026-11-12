@@ -17,7 +17,7 @@ log = logging.getLogger("vgc_bot")
 
 
 class LearningVGCPlayer(Player):
-    """Plays VGC doubles with a softmax policy and takes a gradient step after every battle."""
+    """Plays VGC doubles and queues completed battles for on-policy updates."""
 
     def __init__(
         self,
@@ -144,14 +144,16 @@ class LearningVGCPlayer(Player):
                     bias = [0.0] * len(orders)
                 for i, count in enumerate(trick_room_counts):
                     if count == 1:
-                        bias[i] = 3.0
+                        # The team preference should not reward hurting our speed order.
+                        bias[i] = 3.0 * phi[i, F.F_S + F.P["speed_control_gain"]]
             bias_array = np.asarray(bias)
             idx = self.policy.act(phi, bias_array)
-            summ = F.state_summary(battle)
-            self._traj.setdefault(battle.battle_tag, Trajectory()).steps.append(
-                Step(phi=phi, chosen=idx, psi=summ["psi"], pot=summ["pot"],
-                     bias=bias_array)
-            )
+            if self.learning_enabled:
+                summ = F.state_summary(battle)
+                self._traj.setdefault(battle.battle_tag, Trajectory()).steps.append(
+                    Step(phi=phi, chosen=idx, psi=summ["psi"], pot=summ["pot"],
+                         bias=bias_array)
+                )
             return orders[idx]
         except Exception:
             log.exception("choose_move failed, falling back to random")

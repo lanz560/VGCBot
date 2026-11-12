@@ -5,7 +5,7 @@ from poke_env.battle import PokemonType
 from poke_env.battle.field import Field
 from poke_env.battle.move import Move
 
-from bot.features import _effective_base_power, _effective_move
+from bot.features import _effective_base_power, _bp_after_terrian as _effective_move
 
 
 class EffectiveBasePowerTests(unittest.TestCase):
