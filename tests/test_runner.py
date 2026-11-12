@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
@@ -140,6 +140,45 @@ class RunnerTests(unittest.TestCase):
                         asyncio.run(runner.main())
                 self.assertEqual(error.exception.code, 2)
                 evaluator.assert_not_called()
+
+    def test_public_folder_resamples_before_each_ladder_game_or_challenge(self):
+        for challenge in (False, True):
+            with self.subTest(challenge=challenge), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                folder = root / 'pool'
+                folder.mkdir()
+                for name in ('fast.txt', 'slow_tr_.txt'):
+                    (folder / name).write_text('Pikachu\n- Protect\n')
+                policy = Policy(root / 'weights.json')
+                observed = []
+
+                def create_player(**kwargs):
+                    player = SimpleNamespace(
+                        team_id=kwargs['team_id'], team_file=kwargs['team_file'],
+                        prioritize_trick_room=kwargs['prioritize_trick_room'],
+                        ps_client=SimpleNamespace(stop_listening=AsyncMock()),
+                        n_won_battles=0, n_finished_battles=8, update_team=Mock())
+
+                    async def play(*args):
+                        self.assertEqual(args[-1], 1)
+                        if challenge:
+                            self.assertEqual(args[0], 'Opponent')
+                        observed.append((player.team_file, player.prioritize_trick_room))
+                    player.ladder = AsyncMock(side_effect=play)
+                    player.send_challenges = AsyncMock(side_effect=play)
+                    return player
+
+                args = ['runLadderGames.py', '--team', str(folder), '--seed', '4', '--games', '8']
+                if challenge:
+                    args += ['--challenge', 'Opponent']
+                with patch.dict('os.environ', {'PS_USER': 'test', 'PS_PASS': 'test'}), \
+                        patch('sys.argv', args), patch.object(runner, 'Policy', return_value=policy), \
+                        patch.object(runner, 'LearningVGCPlayer', side_effect=create_player):
+                    asyncio.run(runner.main())
+                self.assertEqual(len(observed), 8)
+                self.assertEqual(len({path for path, _ in observed}), 2)
+                for path, trick_room in observed:
+                    self.assertEqual(trick_room, '_tr_' in Path(path).stem)
 
 
 if __name__ == '__main__':

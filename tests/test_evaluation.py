@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
@@ -108,6 +108,81 @@ class EvaluationTests(unittest.TestCase):
         self.assertGreater(high, 0.4)
         self.assertGreater(E.wilson_interval(0, 10)[1], 0)
         self.assertLess(E.wilson_interval(10, 10)[0], 1)
+
+    def test_directory_pools_are_validated_and_snapshotted_with_filenames(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.config(root)
+            folder = root / 'pool'
+            folder.mkdir()
+            (folder / 'fast.txt').write_text('Pikachu\n- Protect\n')
+            (folder / 'slow_tr_.txt').write_text('Hatterene\n- Trick Room\n')
+            path = root / 'config.json'
+            config = json.loads(path.read_text())
+            config['variants'][0]['team'] = 'pool'
+            path.write_text(json.dumps(config))
+            config = E.load_config(path)
+            output = root / 'run'
+            output.mkdir()
+            frozen = E.snapshot_inputs(config, output)
+            entry = frozen['variants'][0]
+            self.assertNotIn('prioritize_trick_room', entry)
+            self.assertEqual(set(entry['sha256']['team']), {'fast.txt', 'slow_tr_.txt'})
+            copied = Path(entry['team'])
+            self.assertTrue(copied.is_dir())
+            (folder / 'fast.txt').write_text('Changed after snapshot')
+            self.assertEqual((copied / 'fast.txt').read_text(), 'Pikachu\n- Protect\n')
+
+    def test_both_players_resample_between_games_and_report_actual_teams(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = self.config(root)
+            config['games_per_matchup'] = 8
+            for entry, species in ((config['variants'][0], 'Pikachu'),
+                                   (config['opponents'][0], 'Raichu')):
+                folder = root / entry['name']
+                folder.mkdir()
+                (folder / 'fast.txt').write_text(f'{species}\n- Thunderbolt\n')
+                (folder / 'slow_tr_.txt').write_text(f'{species}\n- Trick Room\n')
+                entry['team'] = str(folder)
+            output = root / 'run'
+            output.mkdir()
+            frozen = E.snapshot_inputs(config, output)
+            players, observations = [], []
+
+            def create_player(**kwargs):
+                player = SimpleNamespace(
+                    n_finished_battles=0, n_won_battles=0, battles={},
+                    team_id=kwargs['team_id'], team_file=kwargs['team_file'],
+                    prioritize_trick_room=kwargs['prioritize_trick_room'],
+                    ps_client=SimpleNamespace(stop_listening=AsyncMock()),
+                    update_team=Mock())
+
+                async def play(other, n_battles):
+                    self.assertEqual(n_battles, 1)
+                    observations.append([(p.team_file, p.team_id, p.prioritize_trick_room) for p in players])
+                    for p in players:
+                        p.n_finished_battles += 1
+                        p.battles[str(p.n_finished_battles)] = SimpleNamespace(won=False)
+                player.battle_against = play
+                players.append(player)
+                return player
+
+            with patch.object(E, 'LearningVGCPlayer', side_effect=create_player):
+                result = asyncio.run(E.run_block(
+                    frozen, frozen['variants'][0], frozen['opponents'][0], 3,
+                    output / 'block', reverse=False))
+            self.assertEqual(len(observations), 8)
+            self.assertEqual(len(result['team_selections']), 8)
+            for slot, label in enumerate(('candidate', 'opponent')):
+                self.assertEqual(len({row[slot][0] for row in observations}), 2)
+                self.assertEqual(players[slot].update_team.call_count, 7)
+                players[slot].ps_client.stop_listening.assert_awaited_once()
+                for observed, recorded in zip(observations, result['team_selections']):
+                    path, digest, trick_room = observed[slot]
+                    self.assertEqual(recorded[label]['team_file'], path)
+                    self.assertEqual(recorded[label]['team_id'], digest)
+                    self.assertEqual(trick_room, '_tr_' in Path(path).stem)
 
 
 if __name__ == '__main__':

@@ -15,12 +15,12 @@ import numpy as np
 from .features import (
     D_LEAD_SYNERGY,
     D_VALUE,
-    VALUE_FEATURES,
     PAIR_FEATURES,
     PRIOR_MOVE,
     PRIOR_TP,
     SINGLE_FEATURES,
     TEAMPREVIEW_FEATURES,
+    VALUE_FEATURES,
 )
 
 LEAD_SYNERGY_WEIGHTS = np.array([0.65, 0.8, 1.1])

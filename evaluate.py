@@ -18,6 +18,7 @@ from importlib.metadata import version
 from pathlib import Path
 
 from bot import LearningVGCPlayer, Policy
+from bot.teams import TeamPool, apply_team, team_files
 from poke_env import LocalhostServerConfiguration
 
 
@@ -70,7 +71,9 @@ def load_config(path: Path) -> dict:
             names.add(name)
             for key in ("team", "weights"):
                 source = (path.parent / entry[key]).resolve()
-                if not source.is_file():
+                if key == "team":
+                    TeamPool(source)
+                elif not source.is_file():
                     raise ValueError(f"Missing {key}: {source}")
                 entry[key] = str(source)
             for key in ("lead_synergy", "prioritize_trick_room"):
@@ -88,11 +91,24 @@ def snapshot_inputs(config: dict, output: Path) -> dict:
     inputs.mkdir()
     for group in ("variants", "opponents"):
         for index, entry in enumerate(frozen[group]):
-            entry.setdefault("prioritize_trick_room", "_tr_" in Path(entry["team"]).stem.lower())
+            if Path(entry["team"]).is_file():
+                entry.setdefault("prioritize_trick_room", "_tr_" in Path(entry["team"]).stem.lower())
             entry.setdefault("lead_synergy", True)
             entry["sources"], entry["sha256"] = {}, {}
             for key in ("team", "weights"):
                 original = Path(entry[key])
+                if key == "team" and original.is_dir():
+                    target = inputs / f"{group}-{index}-teams"
+                    target.mkdir()
+                    hashes = {}
+                    for source in team_files(original):
+                        data = source.read_bytes()
+                        (target / source.name).write_bytes(data)
+                        hashes[source.name] = hashlib.sha256(data).hexdigest()
+                    entry["sources"][key] = str(original)
+                    entry["sha256"][key] = hashes
+                    entry[key] = str(target.resolve())
+                    continue
                 data = original.read_bytes()
                 target = inputs / f"{group}-{index}-{key}{original.suffix}"
                 target.write_bytes(data)
@@ -105,17 +121,21 @@ def snapshot_inputs(config: dict, output: Path) -> dict:
 async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
                     directory: Path, reverse: bool) -> dict:
     players = []
+    pools, selected = [], []
     try:
         for entry, offset, label in ((variant, 0, "variant"), (opponent, 1, "opponent")):
             policy = Policy(entry["weights"], seed=2 * seed + offset)
-            team = Path(entry["team"]).read_text()
+            pool = TeamPool(entry["team"], seed=2 * seed + offset)
+            team = pool.choose()
+            pools.append(pool)
+            selected.append(team)
             players.append(LearningVGCPlayer(
                 log_level=logging.WARNING,
                 policy=policy, learn=False, data_dir=directory / label,
-                team_id=entry["sha256"]["team"],
+                team_id=team.team_id, team_file=str(team.path),
                 lead_synergy=entry["lead_synergy"],
-                prioritize_trick_room=entry["prioritize_trick_room"],
-                team=team, battle_format=config["format"],
+                prioritize_trick_room=entry.get("prioritize_trick_room", team.trick_room),
+                team=team.text, battle_format=config["format"],
                 server_configuration=LocalhostServerConfiguration,
                 max_concurrent_battles=1,
                 accept_open_team_sheet=config.get("accept_open_team_sheet", False),
@@ -123,14 +143,30 @@ async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
             ))
         candidate, adversary = players
         first, second = (adversary, candidate) if reverse else (candidate, adversary)
-        await first.battle_against(second, n_battles=config["games_per_matchup"])
+        randomized = any(pool.is_directory for pool in pools)
+        selections = []
+        for index in range(config["games_per_matchup"] if randomized else 1):
+            if index:
+                for slot, entry in enumerate((variant, opponent)):
+                    selected[slot] = pools[slot].choose()
+                    apply_team(players[slot], selected[slot], entry.get("prioritize_trick_room"))
+            if randomized:
+                selections.append({
+                    "battle": index + 1,
+                    **{label: {"team_file": str(team.path), "team_id": team.team_id}
+                       for label, team in zip(("candidate", "opponent"), selected)},
+                })
+            await first.battle_against(
+                second, n_battles=1 if randomized else config["games_per_matchup"]
+            )
         games = candidate.n_finished_battles
         if games != config["games_per_matchup"]:
             raise RuntimeError(f"Expected {config['games_per_matchup']} battles, finished {games}")
         return {"variant": variant["name"], "opponent": opponent["name"], "seed": seed,
                 "games": games, "wins": candidate.n_won_battles,
                 "ties": sum(b.won is None for b in candidate.battles.values()),
-                "challenger": "opponent" if reverse else "variant"}
+                "challenger": "opponent" if reverse else "variant",
+                "team_selections": selections}
     finally:
         await asyncio.gather(*(p.ps_client.stop_listening() for p in players))
 
@@ -142,7 +178,7 @@ async def evaluate(config: dict, output: Path) -> dict:
               "python": platform.python_version(), "poke_env": version("poke-env"),
               "source_sha256": {
                   name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
-                  for name in ("evaluate.py", "bot/features.py", "bot/policy.py", "bot/agent.py")
+                  for name in ("evaluate.py", "bot/features.py", "bot/policy.py", "bot/agent.py", "bot/teams.py")
               },
               "config": frozen, "blocks": [], "complete": False,
               "seed_scope": "Policy sampling only; Showdown battle RNG is not controlled."}

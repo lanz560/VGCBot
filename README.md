@@ -1,80 +1,88 @@
 # VGC Bot
 
-A Pokémon Showdown doubles bot with a linear softmax policy and batched online
-learning. It scores joint actions for both active Pokémon using estimated
-damage, speed, support, and switch matchups.
+A Pokémon Showdown doubles bot that scores pairs of actions with a linear
+softmax policy. Public battles train the policy; local games evaluate frozen
+bots against each other.
+
+For the full setup, configuration, troubleshooting, and decision algorithm,
+see [notes.md](notes.md), the detailed project guide. That file is currently
+excluded from Git.
 
 ## Setup
 
-Use Python 3.11 or newer:
+Run commands from the `VGCBot` directory with Python 3.11 or newer:
 
 ```bash
 python3 -m pip install -r requirements.txt
 ```
 
-Local server setup also requires Git, npm, and Node.js 22.18.0 or newer.
+Automatic local server setup also requires Git, npm, and Node.js 22.18.0 or
+newer. The first setup needs internet access.
 
-## Local games
+## Play locally
 
 ```bash
 python3 runLadderGames.py --local --team teams/team1.txt --games 20
 ```
 
-This installs Showdown under `data/pokemon-showdown` on the first run, starts
-it on port 8000, and runs two bots. Later runs reuse the installation. A server
-started by this command stops when the run ends; an already-running Showdown
-server is reused and left running. Managed servers bind to `127.0.0.1` and use
-`--no-security` for password-free bot connections.
+`--local` downloads and caches Showdown under `data/pokemon-showdown`, starts
+it on port 8000, and arranges games between two bots. It stops a server it
+started after the run; an existing Showdown server is reused and left running.
+**Neither local bot learns.** Results and input snapshots are saved under
+`data/eval/local-TIMESTAMP`.
 
-Both bots use the same team and weights by default. To choose another opponent:
+Both bots use the same team source and weights by default. Choose a different
+opponent with `--opponent-team` and `--opponent-weights`.
+
+## Use a team folder
+
+Both team options accept a single Showdown export or a folder of `.txt` files:
 
 ```bash
-python3 runLadderGames.py --local --team teams/team1.txt --opponent-team teams/team2_tr_.txt --opponent-weights data/checkpoints/opponent.json --games 20 --seed 1
+python3 runLadderGames.py --local --team teams --opponent-team teams --games 20 --seed 1
 ```
 
-Local games are **evaluation only**: neither bot learns. Missing default weights
-use handwritten priors; explicit weight paths must exist. Reports, input
-snapshots, and battle logs go under `data/eval/local-TIMESTAMP`. Use
-`--eval-output PATH` to choose a new report directory, or `--showdown-dir PATH`
-for a different server checkout. First-time setup needs internet access.
-Setup and server logs are saved beside the checkout.
+Each bot independently chooses a random team before every battle. Repeats are
+allowed. Only `.txt` files directly inside the folder are included; subfolders
+are ignored. A fixed file keeps the same team. Folder selection also works on
+the public ladder and in direct challenges.
 
-## Public ladder and challenges
+`--seed` controls policy and team sampling, not Showdown's battle randomness.
+The selected filename controls the `_tr_` Trick Room preference. Logs record
+the actual team file and its content hash.
+
+## Train on the public ladder
 
 ```bash
 export PS_USER="YourShowdownUsername"
 export PS_PASS="YourShowdownPassword"
-python3 runLadderGames.py --team teams/team1.txt --games 50
+python3 runLadderGames.py --team teams --games 50
 ```
 
-The default format is `gen9championsvgc2026regmc`. Use `--format ID` to change it
-or `--challenge USERNAME` to send direct challenges instead of searching the
-ladder. The opponent must accept. `--local` and `--challenge` are incompatible.
+The default format is `gen9championsvgc2026regmc`. Change it with `--format ID`.
+Use `--challenge USERNAME` for direct challenges; the opponent must accept.
+Credentials come from environment variables, not `.env` files.
 
-Public runs learn by default. Weights are saved to `data/weights.json` after
-each batch; `--weights PATH` selects another checkpoint. `--data-dir PATH`
-changes the default weights/log directory. Keep credentials in environment
-variables; the runner does not load `.env` files.
+Public runs update weights every 16 completed battles by default and flush the
+final partial batch during cleanup. Weights default to `data/weights.json`.
+Use `--no-learn` to freeze them; move selection remains stochastic.
 
-## Learning controls
+## Main options
 
-| Flag | Default | Effect |
-| --- | --- | --- |
-| `--batch-size N` | `16` | Completed battles per update. The final partial batch is flushed during cleanup. |
-| `--gamma X` | `0.99` | Discount on future rewards. |
-| `--shaping-scale X` | `0.25` | Discounted HP-potential shaping; zero uses terminal outcomes only. |
-| `--no-learn` | Off | Freeze policy parameters. Actions remain stochastic. |
-| `--seed N` | Random | Seed policy sampling, including team preview. |
-| `--no-lead-synergy` | Off | Disable fixed second-lead synergy bonuses. |
-| `--no-ots` | Off | Disable Open Team Sheet waiting. |
-| `--save-replays` | Off | Save battle replays. |
+| Option | Purpose |
+| --- | --- |
+| `--weights PATH` | Select a checkpoint; defaults to `<data-dir>/weights.json`. |
+| `--data-dir PATH` | Choose where public logs/weights and default local reports go. |
+| `--batch-size N` | Battles per training update; default 16. |
+| `--gamma X` | Reward discount; default 0.99. |
+| `--shaping-scale X` | HP-potential shaping strength; default 0.25, zero for outcome-only rewards. |
+| `--no-lead-synergy` | Disable fixed second-lead pairing bonuses. |
+| `--no-ots` | Disable Open Team Sheet waiting. |
+| `--save-replays` | Save battle replays. |
+| `--showdown-dir PATH` | Use a different cached server checkout in local mode. |
+| `--eval-output PATH` | Select a new local report directory. |
 
-Weights stay fixed while a batch is collected. Pending trajectories live in
-memory and are lost on an abrupt process kill. Older checkpoints are migrated
-by feature name. A team filename containing `_tr_` enables a contextual Trick
-Room preference. Logged team roles are informational.
-
-For all options:
+For every option and its syntax:
 
 ```bash
 python3 runLadderGames.py --help
@@ -82,30 +90,25 @@ python3 runLadderGames.py --help
 
 ## Compare checkpoints
 
-Copy the checkpoints you want to compare, then edit
-[evaluation.example.json](evaluation.example.json) to select variants, opponents,
-teams, seeds, and game counts. Paths resolve relative to that config file.
-Direct evaluator use requires a Showdown server already running on port 8000:
+Edit [evaluation.example.json](evaluation.example.json) to select checkpoints,
+team files/folders, opponents, seeds, and game counts. Each referenced weights
+file must exist. With Showdown already running on port 8000:
 
 ```bash
 python3 evaluate.py --config evaluation.example.json --output data/eval/run1
 ```
 
-The evaluator freezes inputs and reports per-opponent results and aggregate win
-fractions with 95% Wilson intervals. Ties count as non-wins; the intervals do
-not account for dependence between games. Seeds control bot sampling, not
-Showdown's battle RNG. Both variants use the current source code.
+The evaluator snapshots inputs and reports per-opponent results and win-rate
+intervals. It compares checkpoints using the current source code. The detailed
+guide explains server startup, checkpoint preparation, and report fields.
 
-`compare_battles.py` also compares existing ladder logs from the same team and
-format. `scrape_logs.py` downloads replay logs separately; the policy does not
-train from them.
-
-## Tests and generated files
+## Tests and local data
 
 ```bash
 python3 -m unittest discover -s tests -v
 ```
 
-`data/` and `battle_logs/` contain local outputs and are excluded from Git.
-Share selected trained checkpoints separately. The detailed decision notes
-remain in the locally ignored `notes.md`.
+Generated weights, logs, reports, and the downloaded server stay under ignored
+`data/` and `battle_logs/` directories. Share selected trained checkpoints
+separately. `compare_battles.py` compares existing ladder logs;
+`scrape_logs.py` downloads replays for offline analysis, not policy training.

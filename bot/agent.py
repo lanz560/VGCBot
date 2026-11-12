@@ -27,6 +27,7 @@ class LearningVGCPlayer(Player):
         prioritize_trick_room: bool = False,
         lead_synergy: bool = True,
         team_id: str | None = None,
+        team_file: str | None = None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -35,6 +36,7 @@ class LearningVGCPlayer(Player):
         self.prioritize_trick_room = prioritize_trick_room
         self.lead_synergy = lead_synergy
         self.team_id = team_id
+        self.team_file = team_file
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._traj: dict[str, Trajectory] = {}
@@ -144,6 +146,7 @@ class LearningVGCPlayer(Player):
         rec = {
             "t": time.time(), "tag": battle.battle_tag, "format": battle.format,
             "team_id": self.team_id,
+            "team_file": self.team_file,
             "won": won, "turns": battle.turn,
             "my_team": [m.species for m in battle.team.values()],
             "leads": leads,

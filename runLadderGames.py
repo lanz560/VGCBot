@@ -1,7 +1,6 @@
 """Run public battles with learning, or manage local bot evaluations."""
 import argparse
 import asyncio
-import hashlib
 import logging
 import math
 import os
@@ -12,6 +11,7 @@ from pathlib import Path
 
 import evaluate as evaluation
 from bot import LearningVGCPlayer, Policy
+from bot.teams import TeamPool, apply_team
 from local_server import DEFAULT_DIRECTORY, local_showdown
 from poke_env import AccountConfiguration, ShowdownServerConfiguration
 
@@ -20,13 +20,12 @@ logger = logging.getLogger(__name__)
 
 async def evaluate_local(args) -> None:
     """Evaluate a frozen policy against a second bot, using existing CLI inputs."""
-    team = Path(args.team).resolve()
-    opponent_team = Path(args.opponent_team).resolve() if args.opponent_team else team
+    team = Path(args.team).expanduser().resolve()
+    opponent_team = Path(args.opponent_team).expanduser().resolve() if args.opponent_team else team
     weights = (Path(args.weights) if args.weights else Path(args.data_dir) / "weights.json").resolve()
     opponent_weights = Path(args.opponent_weights).resolve() if args.opponent_weights else weights
     for path in (team, opponent_team):
-        if not path.is_file():
-            raise ValueError(f"Team file not found: {path}")
+        TeamPool(path)
     # Explicit checkpoint typos must not silently turn into untrained opponents.
     for supplied in (args.weights, args.opponent_weights):
         if supplied and not Path(supplied).is_file():
@@ -67,7 +66,8 @@ async def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--format", default="gen9championsvgc2026regmc",
                     help="Showdown format id (lowercase, no spaces or brackets)")
-    ap.add_argument("--team", required=True, help="Showdown export-format team file")
+    ap.add_argument("--team", required=True,
+                    help="team file or folder of .txt teams sampled randomly each battle")
     ap.add_argument("--games", type=int, default=20)
     ap.add_argument("--challenge", metavar="USERNAME",
                     help="challenge this player directly instead of searching the ladder")
@@ -85,7 +85,8 @@ async def main() -> None:
     ap.add_argument("--local", action="store_true",
                     help="set up/start Showdown, then run two frozen bots on localhost:8000")
     ap.add_argument("--showdown-dir", help=f"Showdown checkout/cache (default: {DEFAULT_DIRECTORY})")
-    ap.add_argument("--opponent-team", help="local opponent team (defaults to --team)")
+    ap.add_argument("--opponent-team",
+                    help="local opponent team file or folder (defaults to --team)")
     ap.add_argument("--opponent-weights", help="local opponent checkpoint (defaults to our weights)")
     ap.add_argument("--eval-output", help="new local report directory (defaults to data-dir/eval/local-TIMESTAMP)")
     ap.add_argument("--no-ots", action="store_true",
@@ -111,9 +112,11 @@ async def main() -> None:
         except (ValueError, OSError, RuntimeError) as exc:
             ap.error(str(exc))
         return
-    team_path = Path(args.team)
-    team = team_path.read_text()
-    team_id = hashlib.sha256(team.encode()).hexdigest()
+    try:
+        team_pool = TeamPool(args.team, seed=args.seed)
+    except (ValueError, OSError) as exc:
+        ap.error(str(exc))
+    team = team_pool.choose()
     weights_path = Path(args.weights) if args.weights else Path(args.data_dir) / "weights.json"
     policy = Policy(weights_path, seed=args.seed, batch_size=args.batch_size,
                     gamma=args.gamma, shaping_scale=args.shaping_scale)
@@ -126,18 +129,22 @@ async def main() -> None:
     player = LearningVGCPlayer(
         log_level=logging.WARNING,
         policy=policy, data_dir=args.data_dir, learn=not args.no_learn,
-        prioritize_trick_room="_tr_" in Path(args.team).stem.lower(),
+        prioritize_trick_room=team.trick_room,
         lead_synergy=not args.no_lead_synergy,
-        team_id=team_id,
+        team_id=team.team_id, team_file=str(team.path),
         account_configuration=account, server_configuration=server,
-        battle_format=args.format, team=team, max_concurrent_battles=1,
+        battle_format=args.format, team=team.text, max_concurrent_battles=1,
         accept_open_team_sheet=("vgc" in args.format and not args.no_ots), save_replays=str(Path(args.data_dir) / "replays") if args.save_replays else False,
     )
     try:
-        if args.challenge is not None:
-            await player.send_challenges(args.challenge, args.games)
-        else:
-            await player.ladder(args.games)
+        for index in range(args.games if team_pool.is_directory else 1):
+            if index:
+                apply_team(player, team_pool.choose())
+            games = 1 if team_pool.is_directory else args.games
+            if args.challenge is not None:
+                await player.send_challenges(args.challenge, games)
+            else:
+                await player.ladder(games)
     finally:
         try:
             if not args.no_learn:
