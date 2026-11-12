@@ -12,13 +12,12 @@ import hashlib
 import json
 import math
 import platform
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from importlib.metadata import version
 from pathlib import Path
 
-from poke_env import LocalhostServerConfiguration
-
 from bot import LearningVGCPlayer, Policy
+from poke_env import LocalhostServerConfiguration
 
 
 def wilson_interval(wins: int, games: int) -> list[float]:
@@ -55,8 +54,9 @@ def load_config(path: Path) -> dict:
             or len(set(seeds)) != len(seeds)):
         raise ValueError("seeds must be distinct nonnegative integers")
     config["games_per_matchup"], config["seeds"] = count, seeds
-    if type(config.get("accept_open_team_sheet", False)) is not bool:
-        raise ValueError("accept_open_team_sheet must be a boolean")
+    for flag in ("accept_open_team_sheet", "save_replays"):
+        if type(config.get(flag, False)) is not bool:
+            raise ValueError(f"{flag} must be a boolean")
     for group in ("variants", "opponents"):
         entries = config.get(group)
         if not isinstance(entries, list) or not entries:
@@ -117,6 +117,7 @@ async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
                 server_configuration=LocalhostServerConfiguration,
                 max_concurrent_battles=1,
                 accept_open_team_sheet=config.get("accept_open_team_sheet", False),
+                save_replays=str(directory / label / "replays") if config.get("save_replays") else False,
             ))
         candidate, adversary = players
         first, second = (adversary, candidate) if reverse else (candidate, adversary)
@@ -135,7 +136,7 @@ async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
 async def evaluate(config: dict, output: Path) -> dict:
     output.mkdir(parents=True, exist_ok=False)
     frozen = snapshot_inputs(config, output)
-    report = {"started_at": datetime.now(timezone.utc).isoformat(),
+    report = {"started_at": datetime.now(UTC).isoformat(),
               "python": platform.python_version(), "poke_env": version("poke-env"),
               "source_sha256": {
                   name: hashlib.sha256((Path(__file__).parent / name).read_bytes()).hexdigest()
@@ -178,6 +179,13 @@ async def evaluate(config: dict, output: Path) -> dict:
         save()
 
 
+def print_summary(report: dict) -> None:
+    for name, stats in report["summary"].items():
+        low, high = stats["win_rate_95ci"]
+        print(f"{name}: {stats['win_rate']:.1%} wins ({stats['wins']}/{stats['games']}), "
+              f"95% Wilson interval {low:.1%}-{high:.1%}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
@@ -189,10 +197,7 @@ def main():
     except (ValueError, KeyError, TypeError, OSError) as exc:
         parser.error(str(exc))
     report = asyncio.run(evaluate(config, args.output.resolve()))
-    for name, stats in report["summary"].items():
-        low, high = stats["win_rate_95ci"]
-        print(f"{name}: {stats['win_rate']:.1%} wins ({stats['wins']}/{stats['games']}), "
-              f"95% Wilson interval {low:.1%}–{high:.1%}")
+    print_summary(report)
 
 
 if __name__ == "__main__":

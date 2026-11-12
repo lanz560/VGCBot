@@ -41,7 +41,7 @@ python runLadderGames.py --format gen9doublescustomgame --team teams/my_team.txt
 | --- | --- | --- |
 | `--team PATH` | Required | Team file in Showdown export format. If the filename (without extension) contains `_tr_`, the bot applies a contextual Trick Room preference while Trick Room is inactive. |
 | `--format ID` | `gen9championsvgc2026regmc` | Showdown format ID. |
-| `--games N` | `20` | Number of ladder games to play. |
+| `--games N` | `20` | Number of games; with `--local`, games between the two bots. |
 | `--challenge USERNAME` | Off | Challenge this player directly instead of searching the ladder. |
 | `--data-dir PATH` | `data` | Directory for policy weights, battle logs, and optional replays. |
 | `--weights PATH` | `<data-dir>/weights.json` | Policy weights file. Can be shared between evaluation runs. |
@@ -51,15 +51,57 @@ python runLadderGames.py --format gen9doublescustomgame --team teams/my_team.txt
 | `--shaping-scale X` | `0.25` | HP potential shaping strength; set to `0` for terminal-outcome-only training. |
 | `--no-learn` | Off | Freeze policy weights for evaluation; does not update weights after battles. |
 | `--no-lead-synergy` | Off | Disable pairwise lead bonuses for a baseline comparison. |
-| `--local` | Off | Connect to a local Showdown server on port 8000; no account credentials are required. |
+| `--local` | Off | Set up/start a local Showdown server, then launch two frozen bots through `evaluate.py`. |
+| `--showdown-dir PATH` | `<project>/data/pokemon-showdown` | Cached Showdown checkout; downloaded automatically when absent. |
+| `--opponent-team PATH` | Same as `--team` | Local opponent team. |
+| `--opponent-weights PATH` | Same as our weights | Local opponent checkpoint. |
+| `--eval-output PATH` | `<data-dir>/eval/local-TIMESTAMP` | New directory for the local report, input snapshots, and battle logs. |
 | `--no-ots` | Off | Do not wait for Open Team Sheets at preview. Use if the bot stalls at preview in a format without OTS. |
 | `--save-replays` | Off | Save battle replays under `<data-dir>/replays`. |
 
-For a local run:
+For automatic games between two local bots:
 
 ```bash
-python runLadderGames.py --local --format gen9doublescustomgame --team teams/my_team.txt --games 3
+python runLadderGames.py --local --format gen9doublescustomgame --team teams/team1.txt --games 3
 ```
+
+Both bots use the supplied team and weights by default. To give the opponent a
+different team or checkpoint:
+
+```bash
+python runLadderGames.py --local --format gen9doublescustomgame --team teams/team1.txt --opponent-team teams/team2_tr_.txt --opponent-weights data/checkpoints/opponent.json --games 20 --seed 1
+```
+
+`--local` delegates to `evaluate.py`, arranges the challenges automatically, and
+prints the report path. Both bots have learning disabled, even without
+`--no-learn`; training controls such as `--batch-size` apply to public runs.
+It uses one seed and plays exactly `--games` battles. If no seed is supplied,
+it generates one and records it. `--no-lead-synergy`, `--no-ots`, and
+`--save-replays` carry over to the evaluation.
+
+If the default weights file does not exist, both bots start from handwritten
+priors without creating a training checkpoint. Explicitly supplied weight
+paths must exist. `--local` cannot be combined with `--challenge`.
+
+`--local` now manages the server too:
+
+1. Reuse a Showdown server if one is already available on port 8000.
+2. Otherwise, download the official server into `data/pokemon-showdown`, install
+   its npm dependencies, and create the local configuration on the first run.
+3. Start it bound to this computer, wait for its WebSocket handshake, then run
+   the two bots.
+4. Stop the server and its workers when the games finish or the run is
+   interrupted. A server that was already running is left running.
+
+Git, npm, and Node.js 22.18.0 or newer must be installed. The first setup needs
+internet access; later runs reuse the cached checkout and dependencies without
+pulling updates. Setup/startup output goes to `data/pokemon-showdown-setup.log`
+and `data/pokemon-showdown-server.log`. Use `--showdown-dir PATH` to use another
+checkout, including one with custom formats. Its existing configuration is
+preserved; a runtime preload binds a server we launch to `127.0.0.1` and disables
+SSL. The local server runs with `--no-security` for password-free bot games.
+A non-Showdown service occupying port 8000 produces an error instead of starting
+a conflicting server. No public-server credentials are needed.
 
 ## Battle timer
 
