@@ -24,5 +24,6 @@ htmlcov/
 /battle_logs/
 *.log
 
-# Personal notes
+# Personal specifics
 /notes.md
+/teams/

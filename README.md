@@ -4,10 +4,6 @@ A Pokémon Showdown doubles bot that scores pairs of actions with a linear
 softmax policy. Public battles train the policy; local games evaluate frozen
 bots against each other.
 
-For the full setup, configuration, troubleshooting, and decision algorithm,
-see [notes.md](notes.md), the detailed project guide. That file is currently
-excluded from Git.
-
 ## Setup
 
 Run commands from the `VGCBot` directory with Python 3.11 or newer:
