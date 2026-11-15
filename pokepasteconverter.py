@@ -1,10 +1,13 @@
-"""Print the team export from a Poképaste URL."""
+"""Save a Poképaste team export to a numbered text file in a folder."""
 import argparse
 from pathlib import Path
+
 import requests
 from bs4 import BeautifulSoup
 
+
 def access_paste_contents(link: str) -> str:
+    """Extract the team while preserving line breaks."""
     response = requests.get(link, timeout=10)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")
@@ -13,31 +16,26 @@ def access_paste_contents(link: str) -> str:
         for pre in soup.select("article pre")
     )
 
+    if not team_text:
+        raise ValueError("No team found in the Poképaste page")
     return team_text
 
 
-def main(link: str):
-    
+def main(link: str, path: str) -> None:
     paste = access_paste_contents(link)
-    base_name = "team"
-    ext = ".txt"
-    filename = f"{base_name}{ext}"
+    directory = Path(path).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = directory / "team.txt"
     counter = 1
-
-
-    while Path(filename).exists():
-        filename = f"{base_name}{counter}{ext}"
+    while filename.exists():
+        filename = directory / f"team{counter}.txt"
         counter += 1
-
-        try:
-            print(paste, file=f)
-        except: 
-
-
-
-
+    filename.write_text(paste + "\n", encoding="utf-8")
+    print(f"Saved to {filename}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("link", help="Poképaste URL to convert")
-    main(parser.parse_args().link)
+    parser.add_argument("path", help="Output folder for team files")
+    args = parser.parse_args()
+    main(args.link, args.path)
