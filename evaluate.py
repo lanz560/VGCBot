@@ -119,19 +119,20 @@ def snapshot_inputs(config: dict, output: Path) -> dict:
 
 
 async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
-                    directory: Path, reverse: bool) -> dict:
+                    directory: Path, reverse: bool, learner: Policy | None = None) -> dict:
     players = []
     pools, selected = [], []
     try:
         for entry, offset, label in ((variant, 0, "variant"), (opponent, 1, "opponent")):
-            policy = Policy(entry["weights"], seed=2 * seed + offset)
+            learning = offset == 0 and learner is not None
+            policy = learner if learning else Policy(entry["weights"], seed=2 * seed + offset)
             pool = TeamPool(entry["team"], seed=2 * seed + offset)
             team = pool.choose()
             pools.append(pool)
             selected.append(team)
             players.append(LearningVGCPlayer(
                 log_level=logging.WARNING,
-                policy=policy, learn=False, data_dir=directory / label,
+                policy=policy, learn=learning, data_dir=directory / label,
                 team_id=team.team_id, team_file=str(team.path),
                 lead_synergy=entry["lead_synergy"],
                 prioritize_trick_room=entry.get("prioritize_trick_room", team.trick_room),
@@ -168,10 +169,18 @@ async def run_block(config: dict, variant: dict, opponent: dict, seed: int,
                 "challenger": "opponent" if reverse else "variant",
                 "team_selections": selections}
     finally:
-        await asyncio.gather(*(p.ps_client.stop_listening() for p in players))
+        try:
+            if learner is not None:
+                stats = learner.flush()
+                if stats:
+                    logging.getLogger(__name__).info("Final local batch: %s", stats)
+        finally:
+            await asyncio.gather(*(p.ps_client.stop_listening() for p in players))
 
 
-async def evaluate(config: dict, output: Path) -> dict:
+async def evaluate(config: dict, output: Path, learner: Policy | None = None) -> dict:
+    if learner is not None and any(len(config[key]) != 1 for key in ("variants", "opponents", "seeds")):
+        raise ValueError("Local training requires one candidate, opponent, and seed; use frozen evaluation for comparisons")
     output.mkdir(parents=True, exist_ok=False)
     frozen = snapshot_inputs(config, output)
     report = {"started_at": datetime.now(UTC).isoformat(),
@@ -181,9 +190,17 @@ async def evaluate(config: dict, output: Path) -> dict:
                   for name in ("evaluate.py", "bot/features.py", "bot/policy.py", "bot/agent.py", "bot/teams.py")
               },
               "config": frozen, "blocks": [], "complete": False,
+              "mode": "training" if learner is not None else "evaluation",
               "seed_scope": "Policy sampling only; Showdown battle RNG is not controlled."}
+    if learner is not None:
+        report["training"] = {"weights": str(learner.path),
+                              "initial_updates": learner.updates,
+                              "initial_battles_seen": learner.battles_seen}
 
     def save():
+        if learner is not None:
+            report["training"].update(updates=learner.updates, battles_seen=learner.battles_seen,
+                                      pending_battles=learner.pending_battles)
         report["summary"] = {
             entry["name"]: summarize([r for r in report["blocks"] if r["variant"] == entry["name"]])
             for entry in frozen["variants"]
@@ -203,6 +220,7 @@ async def evaluate(config: dict, output: Path) -> dict:
                     result = await run_block(
                         frozen, variant, opponent, seed, output / f"block-{block:04d}",
                         reverse=bool((seed_index + opponent_index) % 2),
+                        learner=learner,
                     )
                     report["blocks"].append(result)
                     save()

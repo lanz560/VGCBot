@@ -41,7 +41,7 @@ class EvaluationTests(unittest.TestCase):
             output = Path(directory) / 'evaluation'
             calls = []
 
-            async def block(config, variant, opponent, seed, path, reverse):
+            async def block(config, variant, opponent, seed, path, reverse, learner=None):
                 calls.append((variant['name'], seed, reverse))
                 # The harness must operate on copies even if training changes originals.
                 self.assertNotEqual(variant['weights'], variant['sources']['weights'])

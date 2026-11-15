@@ -1,4 +1,4 @@
-"""Download complete VGC replays from Pokémon Showdown for offline analysis."""
+"""Currently Unused file"""
 
 import argparse
 import json

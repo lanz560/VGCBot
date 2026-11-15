@@ -1,4 +1,4 @@
-"""Run public battles with learning, or manage local bot evaluations."""
+"""Run public or local training, with optional frozen evaluation."""
 import argparse
 import asyncio
 import logging
@@ -18,8 +18,8 @@ from poke_env import AccountConfiguration, ShowdownServerConfiguration
 logger = logging.getLogger(__name__)
 
 
-async def evaluate_local(args) -> None:
-    """Evaluate a frozen policy against a second bot, using existing CLI inputs."""
+async def run_local(args) -> None:
+    """Train the candidate against a frozen opponent, or freeze both with --no-learn."""
     team = Path(args.team).expanduser().resolve()
     opponent_team = Path(args.opponent_team).expanduser().resolve() if args.opponent_team else team
     weights = (Path(args.weights) if args.weights else Path(args.data_dir) / "weights.json").resolve()
@@ -27,15 +27,19 @@ async def evaluate_local(args) -> None:
     for path in (team, opponent_team):
         TeamPool(path)
     # Explicit checkpoint typos must not silently turn into untrained opponents.
-    for supplied in (args.weights, args.opponent_weights):
+    for supplied in (args.weights if args.no_learn else None, args.opponent_weights):
         if supplied and not Path(supplied).is_file():
             raise ValueError(f"Weights file not found: {supplied}")
     seed = args.seed if args.seed is not None else secrets.randbits(32)
     output = (Path(args.eval_output) if args.eval_output else
               Path(args.data_dir) / "eval" / datetime.now(UTC).strftime("local-%Y%m%d-%H%M%S-%f"))
+    learner = None if args.no_learn else Policy(
+        weights, seed=2 * seed, batch_size=args.batch_size,
+        gamma=args.gamma, shaping_scale=args.shaping_scale,
+    )
     with tempfile.TemporaryDirectory(prefix="vgc-local-") as temporary:
         if not weights.exists():
-            # Let a first local run work without creating/modifying training weights.
+            # Snapshot initial priors without creating the training checkpoint yet.
             weights = Path(temporary) / "priors.json"
             Policy(weights).save()
             if not args.opponent_weights:
@@ -50,15 +54,18 @@ async def evaluate_local(args) -> None:
                            "weights": str(opponent_weights),
                            "lead_synergy": not args.no_lead_synergy}],
         }
-        logger.info("Local evaluation: two frozen bots, %d games, seed %d", args.games, seed)
+        logger.info("Local %s: %d games, seed %d; opponent frozen",
+                    "evaluation" if args.no_learn else "training", args.games, seed)
         if output.exists():
             raise ValueError(f"Evaluation output directory already exists: {output}")
         # Check policy schemas before downloading or starting the server.
         Policy(weights)
         Policy(opponent_weights)
         async with local_showdown(args.showdown_dir or DEFAULT_DIRECTORY):
-            report = await evaluation.evaluate(config, output.resolve())
+            report = await evaluation.evaluate(config, output.resolve(), learner=learner)
     evaluation.print_summary(report)
+    if learner is not None:
+        print(f"Weights saved to {learner.path}")
     print(f"Report: {output.resolve() / 'report.json'}")
 
 
@@ -83,7 +90,7 @@ async def main() -> None:
     ap.add_argument("--no-lead-synergy", action="store_true",
                     help="disable pairwise lead synergy preferences for an A/B comparison")
     ap.add_argument("--local", action="store_true",
-                    help="set up/start Showdown, then run two frozen bots on localhost:8000")
+                    help="set up/start Showdown and train against a frozen bot; --no-learn freezes both")
     ap.add_argument("--showdown-dir", help=f"Showdown checkout/cache (default: {DEFAULT_DIRECTORY})")
     ap.add_argument("--opponent-team",
                     help="local opponent team file or folder (defaults to --team)")
@@ -108,7 +115,7 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     if args.local:
         try:
-            await evaluate_local(args)
+            await run_local(args)
         except (ValueError, OSError, RuntimeError) as exc:
             ap.error(str(exc))
         return

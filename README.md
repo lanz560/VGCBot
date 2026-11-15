@@ -1,8 +1,8 @@
 # VGC Bot
 
 A Pokémon Showdown doubles bot that scores pairs of actions with a linear
-softmax policy. Public battles train the policy; local games evaluate frozen
-bots against each other.
+softmax policy. Public and local runs train the candidate bot; standalone
+evaluation compares frozen checkpoints.
 
 ## Setup
 
@@ -24,8 +24,21 @@ python3 runLadderGames.py --local --team teams/team1.txt --games 20
 `--local` downloads and caches Showdown under `data/pokemon-showdown`, starts
 it on port 8000, and arranges games between two bots. It stops a server it
 started after the run; an existing Showdown server is reused and left running.
-**Neither local bot learns.** Results and input snapshots are saved under
+**The candidate learns; the opponent stays frozen at its starting weights.**
+Candidate weights are saved to `data/weights.json`, or the path given by
+`--weights`. Reports and initial input snapshots go under
 `data/eval/local-TIMESTAMP`.
+
+Your 40-game training command is:
+
+```bash
+python3 runLadderGames.py --team teams --local --opponent-team teams --games 40
+```
+
+With the default batch size, it updates after 16 games, another 16 games, and
+the remaining 8 during cleanup. Use `--no-learn` to freeze both bots for local
+evaluation. Training win rates describe a changing policy; use frozen
+evaluation for checkpoint comparisons.
 
 Both bots use the same team source and weights by default. Choose a different
 opponent with `--opponent-team` and `--opponent-weights`.
@@ -59,7 +72,7 @@ The default format is `gen9championsvgc2026regmc`. Change it with `--format ID`.
 Use `--challenge USERNAME` for direct challenges; the opponent must accept.
 Credentials come from environment variables, not `.env` files.
 
-Public runs update weights every 16 completed battles by default and flush the
+Training runs update weights every 16 completed battles by default and flush the
 final partial batch during cleanup. Weights default to `data/weights.json`.
 Use `--no-learn` to freeze them; move selection remains stochastic.
 
@@ -104,7 +117,7 @@ guide explains server startup, checkpoint preparation, and report fields.
 python3 -m unittest discover -s tests -v
 ```
 
-Generated weights, logs, reports, and the downloaded server stay under ignored
-`data/` and `battle_logs/` directories. Share selected trained checkpoints
+Team exports and generated data stay under ignored `teams/`, `data/`, and
+`battle_logs/` directories. Share selected trained checkpoints
 separately. `compare_battles.py` compares existing ladder logs;
 `scrape_logs.py` downloads replays for offline analysis, not policy training.

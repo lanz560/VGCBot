@@ -79,7 +79,7 @@ class RunnerTests(unittest.TestCase):
             output = root / 'evaluation'
             calls = []
 
-            async def block(config, candidate, opponent, seed, path, reverse):
+            async def block(config, candidate, opponent, seed, path, reverse, learner=None):
                 calls.append(config)
                 self.assertEqual(config['games_per_matchup'], 3)
                 self.assertEqual(seed, 7)
@@ -90,7 +90,7 @@ class RunnerTests(unittest.TestCase):
                 return dict(variant='candidate', opponent='opponent', seed=seed,
                             games=3, wins=2, ties=0)
 
-            args = ['runLadderGames.py', '--local', '--team', str(team),
+            args = ['runLadderGames.py', '--local', '--no-learn', '--team', str(team),
                     '--weights', str(weights), '--games', '3', '--seed', '7',
                     '--eval-output', str(output), '--no-lead-synergy', '--save-replays']
             with patch.dict('os.environ', {}, clear=True), patch('sys.argv', args), \
@@ -110,7 +110,7 @@ class RunnerTests(unittest.TestCase):
             other = root / 'opponent.txt'
             other.write_text('Raichu\n- Thunderbolt\n')
 
-            async def evaluate(config, output):
+            async def evaluate(config, output, learner=None):
                 candidate, opponent = config['variants'][0], config['opponents'][0]
                 self.assertEqual(opponent['team'], str(other.resolve()))
                 self.assertNotEqual(candidate['team'], opponent['team'])
@@ -118,7 +118,7 @@ class RunnerTests(unittest.TestCase):
                 self.assertEqual(candidate['weights'], opponent['weights'])
                 return {'summary': {}}
 
-            args = ['runLadderGames.py', '--local', '--team', str(team),
+            args = ['runLadderGames.py', '--local', '--no-learn', '--team', str(team),
                     '--opponent-team', str(other), '--data-dir', str(root / 'data')]
             with patch('sys.argv', args), \
                     patch.object(runner.evaluation, 'evaluate', side_effect=evaluate) as evaluator:
@@ -132,7 +132,7 @@ class RunnerTests(unittest.TestCase):
             team.write_text('Pikachu\n- Thunderbolt\n')
             for extra in (['--weights', str(Path(directory) / 'missing.json')],
                           ['--challenge', 'Someone']):
-                args = ['runLadderGames.py', '--local', '--team', str(team), *extra]
+                args = ['runLadderGames.py', '--local', '--no-learn', '--team', str(team), *extra]
                 with patch('sys.argv', args), \
                         patch.object(runner.evaluation, 'evaluate') as evaluator, \
                         patch('sys.stderr'):
