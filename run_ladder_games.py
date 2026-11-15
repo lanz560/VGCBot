@@ -100,7 +100,9 @@ async def main() -> None:
                     help="don't wait for Open Team Sheets (use if the bot stalls at team preview "
                          "in a format that has no OTS rule)")
     ap.add_argument("--save-replays", action="store_true")
+
     args = ap.parse_args()
+    
     if args.games < 1 or args.batch_size < 1:
         ap.error("--games and --batch-size must be positive")
     if not 0 <= args.gamma <= 1 or not math.isfinite(args.shaping_scale) or args.shaping_scale < 0:
