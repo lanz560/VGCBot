@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "pokepasteconverter.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "convert_paste.py"
 URL = "https://pokepast.es/example"
 HTML = ('<article><pre><span>Salamence</span> @ Salamencite\n'
         '<span>Ability: </span>Intimidate\n- Protect\n</pre></article>')

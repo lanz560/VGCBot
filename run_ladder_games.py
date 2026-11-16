@@ -17,7 +17,6 @@ from poke_env import AccountConfiguration, ShowdownServerConfiguration
 
 logger = logging.getLogger(__name__)
 
-
 async def run_local(args) -> None:
     """Train the candidate against a frozen opponent, or freeze both with --no-learn."""
     team = Path(args.team).expanduser().resolve()

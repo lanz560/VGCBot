@@ -57,6 +57,7 @@ PAIR_FEATURES = [
     "redirect_protection", # redirectable threat to a vulnerable acting partner
     "setup_safety",        # useful uncapped boosts weighted by survival estimate
     "setup_risk",          # incoming threat while spending a turn setting up
+    "pre_move_ko_risk",     # estimated KO risk from attacks landing before our move
 ]
 F_S, F_P = len(SINGLE_FEATURES), len(PAIR_FEATURES)
 D_MOVE = F_S + F_P
@@ -100,6 +101,7 @@ for k, v in {
     "speed_control_gain": 2.0, "helping_hand_damage": 3.0,
     "helping_hand_ko": 2.0, "redirect_protection": 1.0,
     "setup_safety": 0.8, "setup_risk": -1.0,
+    "pre_move_ko_risk": -3.0,
 }.items():
     PRIOR_MOVE[F_S + P[k]] = v
 
@@ -339,6 +341,93 @@ def _alive(mon: Pokemon | None) -> bool:
     return mon is not None and not mon.fainted
 
 
+def _move_priority(mon: Pokemon, move: Move, battle) -> int:
+    priority = move.priority
+    if move.id == "grassyglide" and Field.GRASSY_TERRAIN in battle.fields and _grounded(mon, battle):
+        priority += 1
+    if mon.ability == "prankster" and move.category == MoveCategory.STATUS:
+        priority += 1
+    if mon.ability == "galewings" and move.type == PokemonType.FLYING and mon.current_hp_fraction == 1:
+        priority += 1
+    if mon.ability == "triage" and move.entry.get("flags", {}).get("heal"):
+        priority += 3
+    return priority
+
+
+def pre_move_ko_risk(battle, mon: Pokemon, move: Move) -> float:
+    """KO risk conditional on each foe aiming its most threatening eligible attack at us."""
+    if move.is_protect_move:
+        return 0.0
+    my_order = (_move_priority(mon, move, battle), speed(mon, battle, True))
+    priority_blocked = (
+        (Field.PSYCHIC_TERRAIN in battle.fields and _grounded(mon, battle))
+        or any(_alive(ally) and ally.ability in ("armortail", "dazzling", "queenlymajesty")
+               for ally in battle.active_pokemon)
+    )
+    hp = mon.current_hp_fraction
+    outcomes = [(hp, 1.0)]
+    for foe in battle.opponent_active_pokemon:
+        if not _alive(foe):
+            continue
+        attacks = []
+        known_moves = list((foe.moves or {}).values())
+        for incoming in known_moves:
+            if incoming.category == MoveCategory.STATUS:
+                continue
+            if incoming.entry.get("target") not in (
+                "normal", "any", "adjacentFoe", "randomNormal", "scripted", "allAdjacent", "allAdjacentFoes", "all"
+            ):
+                continue
+            if incoming.id == "fakeout" and not foe.first_turn:
+                continue
+            if incoming.id == "suckerpunch" and move.category == MoveCategory.STATUS:
+                continue
+            priority = _move_priority(foe, incoming, battle)
+            if priority > 0 and priority_blocked:
+                continue
+            order = (priority, speed(foe, battle, False))
+            chance = 1.0 if order > my_order else 0.5 if order == my_order else 0.0
+            chance *= 1.0 if incoming.accuracy is True else float(incoming.accuracy or 1.0)
+            damage = move_frac(foe, incoming, mon, battle)
+            target = incoming.entry.get("target")
+            if (incoming.id == "expandingforce" and Field.PSYCHIC_TERRAIN in battle.fields
+                    and _grounded(foe, battle)):
+                target = "allAdjacentFoes"
+            targets = sum(_alive(ally) for ally in battle.active_pokemon)
+            if target in ("allAdjacent", "all"):
+                targets += sum(_alive(other) and other is not foe for other in battle.opponent_active_pokemon)
+            if target in ("allAdjacentFoes", "allAdjacent", "all") and targets > 1:
+                damage *= 0.75
+            sash = not incoming.entry.get("multihit") and (
+                mon.item == "focussash" or
+                (mon.ability == "sturdy" and foe.ability not in ("moldbreaker", "teravolt", "turboblaze"))
+            )
+            attacks.append((damage, chance, sash))
+        if not any(m.category != MoveCategory.STATUS for m in known_moves) and len(known_moves) < 4:
+            # shortcut: unrevealed attacks use priority-zero 85-power STAB; refine with opponent inference later.
+            order = (0, speed(foe, battle, False))
+            chance = 1.0 if order > my_order else 0.5 if order == my_order else 0.0
+            category = (MoveCategory.PHYSICAL if foe.base_stats["atk"] >= foe.base_stats["spa"]
+                        else MoveCategory.SPECIAL)
+            for move_type in foe.types:
+                if move_type is not None:
+                    attacks.append((calc_frac(foe, move_type, category, 85, mon), chance,
+                                    mon.item == "focussash" or mon.ability == "sturdy"))
+        damage, chance, sash = max(
+            attacks, key=lambda hit: (hit[1] if hit[0] >= hp else 0.0, hit[0] * hit[1]),
+            default=(0.0, 0.0, False),
+        )
+        next_outcomes = []
+        for remaining, probability in outcomes:
+            after_hit = remaining - damage
+            if sash and remaining == 1.0 and after_hit <= 0:
+                after_hit = 1.0 / _hp_abs(mon)
+            next_outcomes.extend(((after_hit, probability * chance),
+                                  (remaining, probability * (1 - chance))))
+        outcomes = next_outcomes
+    return float(sum(probability for remaining, probability in outcomes if remaining <= 0))
+
+
 def threat_to(battle, mon: Pokemon) -> float:
     """Summed expected damage from both opposing actives (fraction of mon's current HP, capped)."""
     tot = sum(
@@ -383,6 +472,7 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
 
     move: Move = thing
     aux["move"] = move
+    aux["pre_move_ko_risk"] = pre_move_ko_risk(battle, me, move)
     mid = move.id
     kind = move.entry.get("target", "normal")
     if (move.id == "expandingforce" and Field.PSYCHIC_TERRAIN in battle.fields
@@ -475,6 +565,7 @@ def single_features(battle, slot: int, order) -> tuple[np.ndarray, dict]:
 
 def pair_features(a1: dict, a2: dict) -> np.ndarray:
     p = np.zeros(F_P)
+    p[P["pre_move_ko_risk"]] = a1.get("pre_move_ko_risk", 0.0) + a2.get("pre_move_ko_risk", 0.0)
     if a1["kind"] == "attack" and a2["kind"] == "attack" and a1["tgt"] and a1["tgt"] == a2["tgt"]:
         p[P["focus_fire"]] = 1.0
         if a1["ko"] or a2["ko"]:

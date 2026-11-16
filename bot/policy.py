@@ -249,7 +249,7 @@ class Policy:
             return
         b = json.loads(self.path.read_text())
         names = SINGLE_FEATURES + PAIR_FEATURES
-        # Legacy policies had the first 30 move features and first five values.
+        # Legacy policies had 30 or 36 move features and five value features.
         # Map by name when available so adding/reordering features is safe.
         def restore(key, defaults, current_names, legacy_names):
             values = b.get(key, [])
@@ -262,6 +262,8 @@ class Policy:
                     saved_names = current_names
                 elif len(values) == len(legacy_names):
                     saved_names = legacy_names
+                elif key in ("w_move", "anchor_move") and len(values) == 36:
+                    saved_names = current_names[:36]
                 else:
                     raise ValueError(f"Cannot migrate {key}: missing feature names")
             if len(values) != len(saved_names) or len(set(saved_names)) != len(saved_names):

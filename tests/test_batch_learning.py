@@ -88,6 +88,27 @@ class BatchLearningTests(unittest.TestCase):
             path.write_text(json.dumps(blob))
             np.testing.assert_array_equal(Policy(path).w, policy.w)
 
+    def test_pre_survival_checkpoints_keep_all_36_weights_and_anchor(self):
+        for named in (False, True):
+            with self.subTest(named=named), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'weights.json'
+                blob = {
+                    'w_move': list(range(36)), 'anchor_move': [0.5] * 36,
+                    'w_tp': [0.2] * D_TP, 'v': [0] * 5, 'battles_seen': 40,
+                }
+                if named:
+                    blob['feature_names'] = (SINGLE_FEATURES + PAIR_FEATURES)[:36]
+                path.write_text(json.dumps(blob))
+                policy = Policy(path, batch_size=1)
+                np.testing.assert_array_equal(policy.w[:36], np.arange(36))
+                np.testing.assert_array_equal(policy.anchor[:36], [0.5] * 36)
+                self.assertEqual(policy.w[-1], PRIOR_MOVE[-1])
+                self.assertEqual(policy.anchor[-1], PRIOR_MOVE[-1])
+                policy.learn(trajectory(), True)
+                saved = json.loads(path.read_text())
+                self.assertEqual(saved['feature_names'][-1], 'pre_move_ko_risk')
+                self.assertEqual(saved['battles_seen'], 41)
+
     def test_preview_batch_uses_fixed_weights_and_baseline(self):
         with tempfile.TemporaryDirectory() as directory:
             policy = Policy(Path(directory) / 'weights.json', batch_size=2, prior_pull=0)

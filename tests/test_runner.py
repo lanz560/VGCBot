@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import numpy as np
 
-import VGCBot.run_ladder_games as runner
+import run_ladder_games as runner
 from bot.features import D_MOVE, D_VALUE
 from bot.policy import Policy, Step, Trajectory
 

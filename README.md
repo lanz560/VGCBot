@@ -4,6 +4,11 @@ A Pokémon Showdown doubles bot that scores pairs of actions with a linear
 softmax policy. Public and local runs train the candidate bot; standalone
 evaluation compares frozen checkpoints.
 
+Move scoring includes a learned penalty for estimated KO risk before acting.
+It considers opposing attacks that could move first, including priority and
+Trick Room, so a threatened slow attack can score below a safer move. Existing
+checkpoints gain the new feature without losing their learned weights.
+
 ## Setup
 
 Run commands from the `VGCBot` directory with Python 3.11 or newer:
@@ -18,7 +23,7 @@ newer. The first setup needs internet access.
 ## Play locally
 
 ```bash
-python3 runLadderGames.py --local --team teams/team1.txt --games 20
+python3 run_ladder_games.py --local --team teams/team1.txt --games 20
 ```
 
 `--local` downloads and caches Showdown under `data/pokemon-showdown`, starts
@@ -32,7 +37,7 @@ Candidate weights are saved to `data/weights.json`, or the path given by
 Your 40-game training command is:
 
 ```bash
-python3 runLadderGames.py --team teams --local --opponent-team teams --games 40
+python3 run_ladder_games.py --team teams --local --opponent-team teams --games 40
 ```
 
 With the default batch size, it updates after 16 games, another 16 games, and
@@ -48,7 +53,7 @@ opponent with `--opponent-team` and `--opponent-weights`.
 Both team options accept a single Showdown export or a folder of `.txt` files:
 
 ```bash
-python3 runLadderGames.py --local --team teams --opponent-team teams --games 20 --seed 1
+python3 run_ladder_games.py --local --team teams --opponent-team teams --games 20 --seed 1
 ```
 
 Each bot independently chooses a random team before every battle. Repeats are
@@ -65,7 +70,7 @@ the actual team file and its content hash.
 ```bash
 export PS_USER="YourShowdownUsername"
 export PS_PASS="YourShowdownPassword"
-python3 runLadderGames.py --team teams --games 50
+python3 run_ladder_games.py --team teams --games 50
 ```
 
 The default format is `gen9championsvgc2026regmc`. Change it with `--format ID`.
@@ -94,7 +99,7 @@ Use `--no-learn` to freeze them; move selection remains stochastic.
 For every option and its syntax:
 
 ```bash
-python3 runLadderGames.py --help
+python3 run_ladder_games.py --help
 ```
 
 ## Compare checkpoints

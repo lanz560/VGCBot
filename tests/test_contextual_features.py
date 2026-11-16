@@ -118,5 +118,115 @@ class ContextualFeatureTests(unittest.TestCase):
         self.assertTrue(np.all(np.isfinite(psi)))
 
 
+class PreMoveRiskTests(unittest.TestCase):
+    def test_fast_lethal_foe_penalizes_slow_move_but_not_priority_move(self):
+        b = battle(foes=[mon(speed=100, moves=['tackle']), None])
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 1)
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('quickattack', 9)), 0)
+            b.active_pokemon[0]._current_hp = 50
+            with patch.object(F, 'move_frac', return_value=0.3):
+                self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 1)
+
+    def test_trick_room_reverses_speed_but_not_priority(self):
+        b = battle(foes=[mon(speed=100, moves=['tackle']), None])
+        b.fields = {Field.TRICK_ROOM: 1}
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0)
+            b.opponent_active_pokemon[0].moves.clear()
+            b.opponent_active_pokemon[0].moves['extremespeed'] = Move('extremespeed', 9)
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('quickattack', 9)), 1)
+
+    def test_accuracy_speed_ties_and_combined_damage(self):
+        b = battle(foes=[mon(speed=100, moves=['zapcannon']), None])
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertAlmostEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0.5)
+        b = battle(foes=[mon(speed=50, moves=['tackle']), None])
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0.5)
+        b = battle(foes=[mon(speed=100, moves=['tackle']), mon(speed=100, moves=['zapcannon'])])
+        with patch.object(F, 'move_frac', return_value=0.6):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0.5)
+
+    def test_protect_status_priority_and_negative_priority(self):
+        b = battle(foes=[mon(speed=30, moves=['tackle']), None])
+        me = b.active_pokemon[0]
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, me, Move('trickroom', 9)), 1)
+            self.assertEqual(F.pre_move_ko_risk(b, me, Move('protect', 9)), 0)
+            me._stats['spe'] = 10
+            me._ability = 'prankster'
+            self.assertEqual(F.pre_move_ko_risk(b, me, Move('tailwind', 9)), 0)
+
+    def test_priority_blocking_terrain_and_ability(self):
+        b = battle(foes=[mon(speed=100, moves=['quickattack']), None])
+        me = b.active_pokemon[0]
+        with patch.object(F, 'move_frac', return_value=1.2):
+            b.fields = {Field.PSYCHIC_TERRAIN: 1}
+            self.assertEqual(F.pre_move_ko_risk(b, me, Move('tackle', 9)), 0)
+            b.fields = {}
+            b.active_pokemon[1]._ability = 'armortail'
+            self.assertEqual(F.pre_move_ko_risk(b, me, Move('tackle', 9)), 0)
+
+    def test_grassy_glide_priority_and_failed_fake_out(self):
+        b = battle(foes=[mon(speed=100, moves=['grassyglide']), None])
+        b.fields = {Field.GRASSY_TERRAIN: 1}
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('quickattack', 9)), 1)
+            foe = b.opponent_active_pokemon[0]
+            foe.moves.clear()
+            foe.moves['fakeout'] = Move('fakeout', 9)
+            foe._active_turns = 2
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0)
+            foe._active_turns = 1
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 1)
+
+    def test_known_immunity_prevents_false_ko_risk(self):
+        ghost = mon(species='gengar', speed=50)
+        ghost._current_hp = 1
+        b = battle(mine=[ghost, mon()], foes=[mon(speed=100, moves=['tackle']), None])
+        self.assertEqual(F.pre_move_ko_risk(b, ghost, Move('tackle', 9)), 0)
+        ghost._ability = 'levitate'
+        b.opponent_active_pokemon[0].moves.clear()
+        b.opponent_active_pokemon[0].moves['earthquake'] = Move('earthquake', 9)
+        self.assertEqual(F.pre_move_ko_risk(b, ghost, Move('tackle', 9)), 0)
+
+    def test_sash_and_sturdy_survive_one_hit_but_not_two(self):
+        for item, ability in (('focussash', None), (None, 'sturdy')):
+            with self.subTest(item=item, ability=ability):
+                b = battle(foes=[mon(speed=100, moves=['tackle']), None])
+                me = b.active_pokemon[0]
+                me._item, me._ability = item, ability
+                with patch.object(F, 'move_frac', return_value=1.2):
+                    self.assertEqual(F.pre_move_ko_risk(b, me, Move('tackle', 9)), 0)
+                    b.opponent_active_pokemon[1] = mon(speed=100, moves=['tackle'])
+                    self.assertEqual(F.pre_move_ko_risk(b, me, Move('tackle', 9)), 1)
+
+    def test_spread_reduction_and_unknown_moves(self):
+        b = battle(foes=[mon(speed=100, moves=['heatwave']), None])
+        with patch.object(F, 'move_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0)
+            b.active_pokemon[1] = None
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 0.9)
+        b = battle(foes=[mon(speed=100), None])
+        with patch.object(F, 'calc_frac', return_value=1.2):
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('tackle', 9)), 1)
+            self.assertEqual(F.pre_move_ko_risk(b, b.active_pokemon[0], Move('quickattack', 9)), 0)
+
+    def test_risk_feature_reaches_policy_scores(self):
+        b = battle(foes=[mon(speed=100, moves=['tackle']), None])
+        b.valid_orders = [
+            [SingleBattleOrder(Move('tackle', 9), move_target=1),
+             SingleBattleOrder(Move('quickattack', 9), move_target=1)],
+            [SingleBattleOrder(Move('protect', 9))],
+        ]
+        with patch.object(F, 'move_frac', side_effect=lambda attacker, *args:
+                          1.2 if attacker is b.opponent_active_pokemon[0] else 0.4):
+            _, phi = F.build_candidates(b)
+        index = F.F_S + F.P['pre_move_ko_risk']
+        np.testing.assert_array_equal(phi[:, index], [1, 0])
+        self.assertGreater(phi[1] @ F.PRIOR_MOVE, phi[0] @ F.PRIOR_MOVE)
+
+
 if __name__ == '__main__':
     unittest.main()
