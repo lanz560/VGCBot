@@ -427,6 +427,11 @@ def pre_move_ko_risk(battle, mon: Pokemon, move: Move) -> float:
         outcomes = next_outcomes
     return float(sum(probability for remaining, probability in outcomes if remaining <= 0))
 
+def turns_left(effects, effect, current_turn, duration):
+    started = effects.get(effect)
+    if started is None: #added necessary null check
+        return 0
+    return max(0, duration - (current_turn - started))
 
 def threat_to(battle, mon: Pokemon) -> float:
     """Summed expected damage from both opposing actives (fraction of mon's current HP, capped)."""
